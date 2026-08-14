@@ -236,11 +236,17 @@
           <div class="group-manage-header">
             <div>
               <h3>Danh Sách Các Dây Họ / Hụi</h3>
-              <p>Quản lý tất cả các dây họ bạn đang tham gia</p>
+              <p>Quản lý tất cả các dây họ theo tên người dùng và tên dây</p>
             </div>
-            <button id="btnAddNewGroupTab" class="btn btn-primary">
-              <i data-lucide="plus"></i> Tạo Dây Họ Mới
-            </button>
+            <div class="group-header-actions" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+              <div class="search-box" style="max-width: 260px;">
+                <i data-lucide="search"></i>
+                <input type="text" id="searchGroupInput" placeholder="Tìm theo tên người dùng, tên dây..." />
+              </div>
+              <button id="btnAddNewGroupTab" class="btn btn-primary">
+                <i data-lucide="plus"></i> Tạo Dây Họ Mới
+              </button>
+            </div>
           </div>
 
           <div class="groups-grid" id="groupsListGrid">
@@ -364,9 +370,15 @@
         <form id="groupForm" class="modal-form">
           <input type="hidden" id="groupId" />
           
-          <div class="form-group">
-            <label for="groupNameInput">Tên Dây Họ <span class="required">*</span></label>
-            <input type="text" id="groupNameInput" placeholder="Ví dụ: Họ 5 Triệu Chợ Bến Thành" required class="form-control" />
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="groupNameInput">Tên Dây Họ <span class="required">*</span></label>
+              <input type="text" id="groupNameInput" placeholder="Ví dụ: Họ 5 Triệu Chợ Bến Thành" required class="form-control" />
+            </div>
+            <div class="form-group col-6">
+              <label for="groupMemberNameInput">Tên người dùng / Người chơi <span class="required">*</span></label>
+              <input type="text" id="groupMemberNameInput" placeholder="Ví dụ: Nguyễn Văn A (Tôi)" required class="form-control" />
+            </div>
           </div>
 
           <div class="form-row">
@@ -400,7 +412,7 @@
           </div>
 
           <div class="form-group">
-            <label for="groupOwner">Tên chủ hụi / Ghi chú liên hệ</label>
+            <label for="groupOwner">Tên chủ hụi / Liên hệ</label>
             <input type="text" id="groupOwner" placeholder="Ví dụ: Chị Lan - 090xxxxxxx" class="form-control" />
           </div>
 

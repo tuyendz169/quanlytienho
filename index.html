@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Sổ Quản Lý Tiền Họ & Tính Lãi Cộng Dồn</title>
+  <meta name="description" content="Ứng dụng quản lý đóng tiền họ/hụi hàng tháng, tự động tính số tiền lãi từng tháng và tiền lãi cộng dồn trực quan, chính xác." />
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- CDN Libraries -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Navbar / Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand-logo">
+          <div class="logo-icon">
+            <i data-lucide="wallet"></i>
+          </div>
+          <div class="logo-text">
+            <h1>Sổ Họ & Tính Lãi</h1>
+            <span class="badge">Theo Dõi Thông Minh</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-center">
+        <!-- Dây Họ Selector Dropdown -->
+        <div class="group-select-wrapper">
+          <i data-lucide="layers" class="select-icon"></i>
+          <select id="groupSelect" class="group-select">
+            <!-- Dynamic options -->
+          </select>
+          <button id="btnNewGroupHeader" class="btn btn-icon btn-secondary" title="Thêm Dây Họ Mới">
+            <i data-lucide="plus"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <button id="btnDemoData" class="btn btn-sm btn-outline-warning" title="Nạp dữ liệu thử nghiệm">
+          <i data-lucide="sparkles"></i> <span class="hide-mobile">Dữ liệu mẫu</span>
+        </button>
+        <button id="btnExportMenu" class="btn btn-sm btn-secondary" title="Xuất/Nhập dữ liệu">
+          <i data-lucide="download"></i> <span class="hide-mobile">Sao lưu</span>
+        </button>
+        <button id="themeToggle" class="btn btn-icon btn-ghost" title="Đổi giao diện Sáng/Tối">
+          <i data-lucide="sun" class="icon-sun"></i>
+          <i data-lucide="moon" class="icon-moon"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="app-main">
+      <!-- Active Group Info Banner -->
+      <section class="group-banner">
+        <div class="banner-info">
+          <h2 id="currentGroupName">Dây Họ 5 Triệu (Tháng)</h2>
+          <p id="currentGroupMeta" class="meta-text">Mức đóng quy định: <strong id="baseAmountDisplay">5.000.000 đ</strong> / kỳ • Chu kỳ: <span id="periodDisplay">Hàng tháng</span></p>
+        </div>
+        <div class="banner-actions">
+          <button id="btnEditCurrentGroup" class="btn btn-sm btn-ghost">
+            <i data-lucide="edit-3"></i> <span>Sửa dây họ</span>
+          </button>
+          <button id="btnAddPeriod" class="btn btn-primary">
+            <i data-lucide="plus-circle"></i> <span>Thêm kỳ đóng</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Executive KPI Cards -->
+      <section class="kpi-grid">
+        <!-- Card 1: Cumulative Interest (HIGHLIGHT) -->
+        <div class="kpi-card highlight-card">
+          <div class="kpi-header">
+            <span class="kpi-title">TỔNG LÃI CỘNG DỒN</span>
+            <div class="kpi-icon icon-emerald">
+              <i data-lucide="trending-up"></i>
+            </div>
+          </div>
+          <div class="kpi-value text-emerald" id="statCumulativeInterest">0 đ</div>
+          <div class="kpi-footer">
+            <span class="kpi-subtext" id="statInterestCount">Tích lũy qua 0 kỳ đã đóng</span>
+            <span class="trend-badge positive" id="statReturnRate">0% Tiết kiệm</span>
+          </div>
+        </div>
+
+        <!-- Card 2: Total Cash Paid -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">TỔNG TIỀN ĐÃ ĐÓNG</span>
+            <div class="kpi-icon icon-blue">
+              <i data-lucide="arrow-down-right"></i>
+            </div>
+          </div>
+          <div class="kpi-value" id="statTotalActualPaid">0 đ</div>
+          <div class="kpi-footer">
+            <span class="kpi-subtext">Số tiền thực tế xuất quỹ</span>
+          </div>
+        </div>
+
+        <!-- Card 3: Standard Total Base Value -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">TỔNG MỨC CHUẨN</span>
+            <div class="kpi-icon icon-purple">
+              <i data-lucide="layers"></i>
+            </div>
+          </div>
+          <div class="kpi-value" id="statTotalBaseAmount">0 đ</div>
+          <div class="kpi-footer">
+            <span class="kpi-subtext">Giá trị quy định ban đầu</span>
+          </div>
+        </div>
+
+        <!-- Card 4: Progress Status -->
+        <div class="kpi-card">
+          <div class="kpi-header">
+            <span class="kpi-title">TIẾN ĐỘ DÂY HỌ</span>
+            <div class="kpi-icon icon-amber">
+              <i data-lucide="pie-chart"></i>
+            </div>
+          </div>
+          <div class="kpi-value" id="statProgressPeriods">0 / 0 kỳ</div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="statProgressBar" style="width: 0%;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Navigation Tabs -->
+      <nav class="content-tabs">
+        <button class="tab-btn active" data-tab="payments">
+          <i data-lucide="table"></i> Danh Sách Kỳ Đóng
+        </button>
+        <button class="tab-btn" data-tab="analytics">
+          <i data-lucide="bar-chart-2"></i> Phân Tích & Biểu Đồ
+        </button>
+        <button class="tab-btn" data-tab="groups">
+          <i data-lucide="settings"></i> Quản Lý Dây Họ
+        </button>
+      </nav>
+
+      <!-- Tab 1: Payment Table View -->
+      <section id="tab-payments" class="tab-content active">
+        <div class="table-toolbar">
+          <div class="search-box">
+            <i data-lucide="search"></i>
+            <input type="text" id="searchInput" placeholder="Tìm kiếm ghi chú, số tiền, kỳ..." />
+          </div>
+          <div class="filter-actions">
+            <select id="filterStatus" class="select-sm">
+              <option value="all">Tất cả trạng thái</option>
+              <option value="paid">Đã đóng tiền</option>
+              <option value="won">Đã hốt họ (Lấy họ)</option>
+              <option value="pending">Chưa đóng</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Desktop & Responsive Data Table -->
+        <div class="table-container shadow-sm">
+          <table class="data-table" id="paymentsTable">
+            <thead>
+              <tr>
+                <th>Kỳ</th>
+                <th>Ngày đóng</th>
+                <th>Mức đóng chuẩn</th>
+                <th>Thực đóng</th>
+                <th>Tiền lãi tháng đó</th>
+                <th>Lãi cộng dồn</th>
+                <th>Trạng thái</th>
+                <th>Ghi chú</th>
+                <th class="text-right">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="paymentsTableBody">
+              <!-- Rendered dynamically -->
+            </tbody>
+          </table>
+          <div id="emptyState" class="empty-state hidden">
+            <i data-lucide="inbox" class="empty-icon"></i>
+            <h3>Chưa có dữ liệu kỳ đóng</h3>
+            <p>Bấm nút "Thêm kỳ đóng" để nhập số tiền đóng tháng này và xem số tiền lãi nhận được!</p>
+            <button id="btnEmptyAdd" class="btn btn-primary mt-3">
+              <i data-lucide="plus-circle"></i> Thêm Kỳ Đầu Tiên
+            </button>
+          </div>
+        </div>
+
+        <!-- Mobile Card List View (Visible on small screens) -->
+        <div class="mobile-card-list" id="mobileCardList">
+          <!-- Rendered dynamically -->
+        </div>
+      </section>
+
+      <!-- Tab 2: Analytics & Charts View -->
+      <section id="tab-analytics" class="tab-content">
+        <div class="charts-grid">
+          <div class="chart-card shadow-sm">
+            <div class="chart-header">
+              <h3><i data-lucide="trending-up"></i> Tăng Trưởng Tiền Lãi Cộng Dồn (VNĐ)</h3>
+              <p>Biểu đồ thể hiện tích lũy tiền lãi tăng dần qua từng kỳ</p>
+            </div>
+            <div class="chart-body">
+              <canvas id="chartCumulativeInterest"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card shadow-sm">
+            <div class="chart-header">
+              <h3><i data-lucide="bar-chart-3"></i> So Sánh Mức Chuẩn vs Thực Đóng</h3>
+              <p>So sánh số tiền quy định và số tiền thực tế xuất ra</p>
+            </div>
+            <div class="chart-body">
+              <canvas id="chartComparison"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: Group Management View -->
+      <section id="tab-groups" class="tab-content">
+        <div class="group-manage-container">
+          <div class="group-manage-header">
+            <div>
+              <h3>Danh Sách Các Dây Họ / Hụi</h3>
+              <p>Quản lý tất cả các dây họ bạn đang tham gia</p>
+            </div>
+            <button id="btnAddNewGroupTab" class="btn btn-primary">
+              <i data-lucide="plus"></i> Tạo Dây Họ Mới
+            </button>
+          </div>
+
+          <div class="groups-grid" id="groupsListGrid">
+            <!-- Dynamic Dây Họ cards -->
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Mobile Floating Add Button -->
+    <button id="fabAddPeriod" class="fab-btn" title="Thêm kỳ đóng">
+      <i data-lucide="plus"></i>
+    </button>
+
+    <!-- Modal: Add / Edit Payment Period -->
+    <div id="paymentModal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="paymentModalTitle">Thêm Kỳ Đóng Tiền Họ</h3>
+          <button class="modal-close" data-close-modal="paymentModal">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <form id="paymentForm" class="modal-form">
+          <input type="hidden" id="paymentId" />
+          
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="periodNumber">Kỳ số / Tháng <span class="required">*</span></label>
+              <input type="number" id="periodNumber" min="1" required class="form-control" />
+            </div>
+            <div class="form-group col-6">
+              <label for="paymentDate">Ngày đóng</label>
+              <input type="date" id="paymentDate" class="form-control" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="baseAmountInput">Mức đóng quy định (Mức chuẩn)</label>
+            <div class="input-with-suffix">
+              <input type="text" id="baseAmountInput" class="form-control currency-input" readonly />
+              <span class="suffix">đ</span>
+            </div>
+            <small class="form-hint">Mức quy định của dây họ này</small>
+          </div>
+
+          <div class="form-group highlight-form-group">
+            <label for="actualAmountInput">Số tiền THỰC ĐÓNG tháng này <span class="required">*</span></label>
+            <div class="input-with-suffix">
+              <input type="text" id="actualAmountInput" placeholder="Ví dụ: 4.500.000" required class="form-control currency-input primary-focus" />
+              <span class="suffix">đ</span>
+            </div>
+            <div class="quick-bid-presets mt-2">
+              <span class="quick-label">Gợi ý bớt tiền lãi:</span>
+              <button type="button" class="btn-chip" data-discount="200000">Lãi 200k</button>
+              <button type="button" class="btn-chip" data-discount="300000">Lãi 300k</button>
+              <button type="button" class="btn-chip" data-discount="500000">Lãi 500k</button>
+              <button type="button" class="btn-chip" data-discount="700000">Lãi 700k</button>
+              <button type="button" class="btn-chip" data-discount="1000000">Lãi 1 Tr</button>
+            </div>
+          </div>
+
+          <!-- Real-time Interest Calculation Preview Box -->
+          <div class="calc-preview-card">
+            <div class="calc-row">
+              <span>Mức đóng chuẩn:</span>
+              <strong id="previewBase">5.000.000 đ</strong>
+            </div>
+            <div class="calc-row">
+              <span>Thực đóng:</span>
+              <strong id="previewActual">0 đ</strong>
+            </div>
+            <div class="calc-row result-row">
+              <span>TIỀN LÃI THÁNG NÀY:</span>
+              <strong id="previewInterest" class="text-emerald">+0 đ</strong>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="paymentStatus">Trạng thái đóng</label>
+              <select id="paymentStatus" class="form-control">
+                <option value="paid">Đã đóng tiền (Chưa hốt)</option>
+                <option value="won">Đã HỐT HỌ kỳ này (Lấy tiền)</option>
+                <option value="pending">Dự kiến / Chưa đóng</option>
+              </select>
+            </div>
+            <div class="form-group col-6">
+              <label for="wonAmountInput">Số tiền hốt (nếu có)</label>
+              <div class="input-with-suffix">
+                <input type="text" id="wonAmountInput" placeholder="0" class="form-control currency-input" />
+                <span class="suffix">đ</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="paymentNote">Ghi chú</label>
+            <input type="text" id="paymentNote" placeholder="Ví dụ: Đóng qua chuyển khoản Viettinbank..." class="form-control" />
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" data-close-modal="paymentModal">Hủy</button>
+            <button type="submit" class="btn btn-primary">
+              <i data-lucide="check"></i> Lưu Kỳ Đóng
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Add / Edit Dây Họ (Group) -->
+    <div id="groupModal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="groupModalTitle">Thêm Dây Họ Mới</h3>
+          <button class="modal-close" data-close-modal="groupModal">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <form id="groupForm" class="modal-form">
+          <input type="hidden" id="groupId" />
+          
+          <div class="form-group">
+            <label for="groupNameInput">Tên Dây Họ <span class="required">*</span></label>
+            <input type="text" id="groupNameInput" placeholder="Ví dụ: Họ 5 Triệu Chợ Bến Thành" required class="form-control" />
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="groupBaseAmountInput">Mức đóng quy định (Mức chuẩn) <span class="required">*</span></label>
+              <div class="input-with-suffix">
+                <input type="text" id="groupBaseAmountInput" placeholder="5.000.000" required class="form-control currency-input" />
+                <span class="suffix">đ</span>
+              </div>
+            </div>
+            <div class="form-group col-6">
+              <label for="groupPeriodType">Chu kỳ đóng</label>
+              <select id="groupPeriodType" class="form-control">
+                <option value="Hàng tháng">Hàng tháng</option>
+                <option value="15 ngày">15 ngày / kỳ</option>
+                <option value="Hàng tuần">Hàng tuần</option>
+                <option value="Hàng ngày">Hàng ngày</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="groupTotalPeriods">Tổng số kỳ (Dự kiến)</label>
+              <input type="number" id="groupTotalPeriods" min="1" value="12" class="form-control" />
+            </div>
+            <div class="form-group col-6">
+              <label for="groupStartDate">Ngày bắt đầu</label>
+              <input type="date" id="groupStartDate" class="form-control" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="groupOwner">Tên chủ hụi / Ghi chú liên hệ</label>
+            <input type="text" id="groupOwner" placeholder="Ví dụ: Chị Lan - 090xxxxxxx" class="form-control" />
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" data-close-modal="groupModal">Hủy</button>
+            <button type="submit" class="btn btn-primary">
+              <i data-lucide="check"></i> Lưu Dây Họ
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Backup & Restore / Data Export Import -->
+    <div id="exportModal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Sao Lưu & Xuất Dữ Liệu</h3>
+          <button class="modal-close" data-close-modal="exportModal">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="backup-option-card">
+            <div class="option-icon icon-emerald"><i data-lucide="file-spreadsheet"></i></div>
+            <div class="option-info">
+              <h4>Xuất file Excel (CSV)</h4>
+              <p>Tải danh sách chi tiết các kỳ đóng và số tiền lãi ra file CSV để mở bằng Excel / Google Sheets.</p>
+            </div>
+            <button id="btnExportCSV" class="btn btn-outline-primary btn-sm">Xuất Excel</button>
+          </div>
+
+          <div class="backup-option-card">
+            <div class="option-icon icon-blue"><i data-lucide="database"></i></div>
+            <div class="option-info">
+              <h4>Xuất Backup Dữ Liệu (JSON)</h4>
+              <p>Lưu lại toàn bộ các dây họ và lịch sử đóng để khôi phục khi đổi thiết bị.</p>
+            </div>
+            <button id="btnExportJSON" class="btn btn-outline-primary btn-sm">Tải file JSON</button>
+          </div>
+
+          <div class="backup-option-card">
+            <div class="option-icon icon-purple"><i data-lucide="upload-cloud"></i></div>
+            <div class="option-info">
+              <h4>Khôi Phục Từ File Backup</h4>
+              <p>Nhập lại file JSON đã lưu trước đây để phục hồi dữ liệu.</p>
+            </div>
+            <label for="importJsonFile" class="btn btn-secondary btn-sm pointer">
+              <i data-lucide="upload"></i> Chọn file JSON
+              <input type="file" id="importJsonFile" accept=".json" class="hidden-file-input" />
+            </label>
+          </div>
+
+          <div class="backup-option-card danger-zone">
+            <div class="option-icon icon-rose"><i data-lucide="alert-triangle"></i></div>
+            <div class="option-info">
+              <h4>Xóa Toàn Bộ Dữ Liệu</h4>
+              <p>Xóa tất cả các dây họ và lịch sử đóng (Khôi phục trạng thái ban đầu).</p>
+            </div>
+            <button id="btnClearAllData" class="btn btn-danger btn-sm">Xóa tất cả</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden">
+      <i data-lucide="info" id="toastIcon"></i>
+      <span id="toastMessage">Thông báo</span>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

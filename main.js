@@ -12,11 +12,14 @@ let appState = {
   groups: [],
   payments: [],
   activeGroupId: null,
+  selectedUserTab: 'ALL', // 'ALL' or memberName
   theme: 'dark',
   filterStatus: 'all',
   searchQuery: '',
   searchGroupQuery: ''
 };
+
+let confirmModalCallback = null;
 
 let interestChartInstance = null;
 let comparisonChartInstance = null;
@@ -181,6 +184,7 @@ function computeKPIs() {
 
 // --- 5. RENDER FUNCTIONS ---
 function renderAll() {
+  renderUserTabs();
   renderGroupSelect();
   renderGroupBanner();
   renderKPIs();
@@ -193,12 +197,67 @@ function renderAll() {
   }
 }
 
+function renderUserTabs() {
+  const container = document.getElementById('userTabsContainer');
+  if (!container) return;
+
+  // Extract unique member names
+  const userMap = {};
+  appState.groups.forEach(g => {
+    const name = g.memberName || 'Chưa đặt tên';
+    userMap[name] = (userMap[name] || 0) + 1;
+  });
+
+  const uniqueUsers = Object.keys(userMap);
+  const totalGroups = appState.groups.length;
+
+  let html = `
+    <button class="user-tab-btn ${appState.selectedUserTab === 'ALL' ? 'active' : ''}" onclick="selectUserTab('ALL')">
+      <i data-lucide="users"></i> Tất cả người dùng <span class="user-tab-count">${totalGroups}</span>
+    </button>
+  `;
+
+  uniqueUsers.forEach(uName => {
+    const isSelected = appState.selectedUserTab === uName;
+    const count = userMap[uName];
+    html += `
+      <button class="user-tab-btn ${isSelected ? 'active' : ''}" onclick="selectUserTab('${uName.replace(/'/g, "\\'")}')">
+        <i data-lucide="user"></i> ${uName} <span class="user-tab-count">${count} dây</span>
+      </button>
+    `;
+  });
+
+  container.innerHTML = html;
+}
+
+window.selectUserTab = function(userName) {
+  appState.selectedUserTab = userName;
+  
+  // Auto switch active group to the first group belonging to this user
+  if (userName !== 'ALL') {
+    const userGroups = appState.groups.filter(g => (g.memberName || 'Chưa đặt tên') === userName);
+    if (userGroups.length > 0 && (!appState.activeGroupId || !userGroups.find(g => g.id === appState.activeGroupId))) {
+      appState.activeGroupId = userGroups[0].id;
+    }
+  }
+
+  saveDataToStorage();
+  renderAll();
+};
+
 function renderGroupSelect() {
   const select = document.getElementById('groupSelect');
   if (!select) return;
 
   select.innerHTML = '';
-  appState.groups.forEach(g => {
+  
+  // Filter groups by selected User Tab
+  let groupsToDisplay = appState.groups;
+  if (appState.selectedUserTab !== 'ALL') {
+    groupsToDisplay = appState.groups.filter(g => (g.memberName || 'Chưa đặt tên') === appState.selectedUserTab);
+  }
+
+  groupsToDisplay.forEach(g => {
     const option = document.createElement('option');
     option.value = g.id;
     const memberStr = g.memberName ? `👤 ${g.memberName} - ` : '';
@@ -381,11 +440,16 @@ function renderGroupListTab() {
   const container = document.getElementById('groupsListGrid');
   if (!container) return;
 
-  // Filter groups by searchGroupQuery (tên người dùng hoặc tên dây)
+  // Filter groups by selectedUserTab AND searchGroupQuery
   let groupsToRender = appState.groups;
+  
+  if (appState.selectedUserTab !== 'ALL') {
+    groupsToRender = groupsToRender.filter(g => (g.memberName || 'Chưa đặt tên') === appState.selectedUserTab);
+  }
+
   if (appState.searchGroupQuery) {
     const q = appState.searchGroupQuery.toLowerCase();
-    groupsToRender = appState.groups.filter(g => 
+    groupsToRender = groupsToRender.filter(g => 
       (g.name || '').toLowerCase().includes(q) || 
       (g.memberName || '').toLowerCase().includes(q) ||
       (g.owner || '').toLowerCase().includes(q)
@@ -831,15 +895,35 @@ window.editPayment = function(id) {
   openPaymentModal(id);
 };
 
-window.deletePayment = function(id) {
-  if (confirm('Bạn có chắc chắn muốn xóa kỳ đóng này?')) {
-    appState.payments = appState.payments.filter(p => p.id !== id);
-    saveDataToStorage();
-    renderAll();
-    showToast('Đã xóa kỳ đóng!');
-  }
-};
+// --- CUSTOM CENTERED CONFIRMATION POPUP ---
+function showCustomConfirmModal({ title = 'Xác Nhận Xóa', message = 'Bạn có chắc chắn muốn xóa mục này?', onConfirm }) {
+  const modal = document.getElementById('confirmModal');
+  const titleEl = document.getElementById('confirmModalTitle');
+  const msgEl = document.getElementById('confirmModalMessage');
+  
+  if (!modal) return;
 
+  if (titleEl) titleEl.textContent = title;
+  if (msgEl) msgEl.textContent = message;
+
+  confirmModalCallback = onConfirm;
+  openModal('confirmModal');
+}
+
+// Setup Confirm Modal Buttons
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('btnCancelConfirm')?.addEventListener('click', () => {
+    closeModal('confirmModal');
+    confirmModalCallback = null;
+  });
+
+  document.getElementById('btnAcceptConfirm')?.addEventListener('click', () => {
+    if (typeof confirmModalCallback === 'function') {
+      confirmModalCallback();
+    }
+    closeModal('confirmModal');
+    confirmModalCallback = null;
+  });
 // GROUP CRUD
 function openGroupModal(groupId = null) {
   const form = document.getElementById('groupForm');
@@ -928,20 +1012,43 @@ window.openEditGroupModal = function(id) {
   openGroupModal(id);
 };
 
+window.deletePayment = function(id) {
+  const p = appState.payments.find(item => item.id === id);
+  const periodStr = p ? `Kỳ số ${p.periodNumber}` : 'kỳ đóng này';
+
+  showCustomConfirmModal({
+    title: 'Xóa Kỳ Đóng Tiền',
+    message: `Bạn có chắc chắn muốn xóa ${periodStr}? Tất cả dữ liệu đóng tiền và lãi của kỳ này sẽ bị xóa.`,
+    onConfirm: () => {
+      appState.payments = appState.payments.filter(item => item.id !== id);
+      saveDataToStorage();
+      renderAll();
+      showToast('Đã xóa kỳ đóng!');
+    }
+  });
+};
+
 window.deleteGroup = function(id) {
   if (appState.groups.length <= 1) {
     alert('Bạn phải giữ lại ít nhất 1 dây họ!');
     return;
   }
 
-  if (confirm('Bạn có chắc muốn xóa Dây Họ này và tất cả dữ liệu đóng tiền thuộc về nó?')) {
-    appState.groups = appState.groups.filter(g => g.id !== id);
-    appState.payments = appState.payments.filter(p => p.groupId !== id);
-    appState.activeGroupId = appState.groups[0].id;
-    saveDataToStorage();
-    renderAll();
-    showToast('Đã xóa Dây Họ!');
-  }
+  const group = appState.groups.find(g => g.id === id);
+  const groupName = group ? group.name : 'dây họ này';
+
+  showCustomConfirmModal({
+    title: 'Xóa Dây Họ',
+    message: `Bạn có chắc chắn muốn xóa "${groupName}"? Tất cả lịch sử đóng tiền thuộc dây họ này sẽ bị xóa vĩnh viễn.`,
+    onConfirm: () => {
+      appState.groups = appState.groups.filter(g => g.id !== id);
+      appState.payments = appState.payments.filter(p => p.groupId !== id);
+      appState.activeGroupId = appState.groups[0].id;
+      saveDataToStorage();
+      renderAll();
+      showToast('Đã xóa Dây Họ!');
+    }
+  });
 };
 
 window.selectActiveGroup = function(id) {

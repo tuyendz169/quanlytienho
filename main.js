@@ -234,6 +234,10 @@ function openCloudSyncModal() {
   openModal('cloudModal');
 }
 
+window.openCloudSyncModal = function() {
+  openCloudSyncModal();
+};
+
 // --- 3. THEME MANAGEMENT ---
 function initTheme() {
   document.documentElement.setAttribute('data-theme', appState.theme);

@@ -48,7 +48,7 @@
       </div>
 
       <div class="header-right">
-        <button id="btnCloudSync" class="btn btn-sm btn-primary" title="Đồng bộ máy tính & điện thoại">
+        <button id="btnCloudSync" onclick="openCloudSyncModal()" class="btn btn-sm btn-primary" title="Đồng bộ máy tính & điện thoại">
           <i data-lucide="cloud"></i> <span class="hide-mobile" id="cloudStatusText">Đồng bộ Cloud</span>
         </button>
         <button id="btnDemoData" class="btn btn-sm btn-outline-warning" title="Nạp dữ liệu thử nghiệm">
@@ -471,6 +471,15 @@
           </button>
         </div>
         <div class="modal-body">
+          <div class="backup-option-card" style="background: linear-gradient(135deg, rgba(16,185,129,0.12), rgba(59,130,246,0.1)); border: 1px solid var(--accent-emerald);">
+            <div class="option-icon icon-emerald"><i data-lucide="cloud"></i></div>
+            <div class="option-info">
+              <h4>Đồng Bộ Máy Tính ↔ Điện Thoại (Cloud Sync)</h4>
+              <p>Tự động lưu và đồng bộ trực tuyến dữ liệu với điện thoại qua mã QR.</p>
+            </div>
+            <button type="button" onclick="openCloudSyncModal()" class="btn btn-primary btn-sm">Mở Đồng Bộ Cloud</button>
+          </div>
+
           <div class="backup-option-card">
             <div class="option-icon icon-emerald"><i data-lucide="file-spreadsheet"></i></div>
             <div class="option-info">

@@ -81,7 +81,15 @@ function loadDataFromStorage() {
     const storedActiveGroup = localStorage.getItem(STORAGE_KEY_ACTIVE_GROUP);
     const storedTheme = localStorage.getItem(STORAGE_KEY_THEME);
 
-    if (storedGroups) appState.groups = JSON.parse(storedGroups);
+    if (storedGroups) {
+      appState.groups = JSON.parse(storedGroups);
+      // Data Sanitization: Ensure all existing groups have a memberName
+      appState.groups.forEach((g, idx) => {
+        if (!g.memberName || !g.memberName.trim()) {
+          g.memberName = `Người dùng ${idx + 1}`;
+        }
+      });
+    }
     if (storedPayments) appState.payments = JSON.parse(storedPayments);
     if (storedActiveGroup) appState.activeGroupId = storedActiveGroup;
     if (storedTheme) appState.theme = storedTheme;
@@ -201,10 +209,10 @@ function renderUserTabs() {
   const container = document.getElementById('userSidebarList');
   if (!container) return;
 
-  // Extract unique member names
+  // Extract unique member names with fallback
   const userMap = {};
-  appState.groups.forEach(g => {
-    const name = g.memberName || 'Chưa đặt tên';
+  appState.groups.forEach((g, idx) => {
+    const name = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : `Người dùng ${idx + 1}`;
     userMap[name] = (userMap[name] || 0) + 1;
   });
 
@@ -237,8 +245,11 @@ window.selectUserTab = function(userName) {
   
   // Auto switch active group to the first group belonging to this user
   if (userName !== 'ALL') {
-    const userGroups = appState.groups.filter(g => (g.memberName || 'Chưa đặt tên') === userName);
-    if (userGroups.length > 0 && (!appState.activeGroupId || !userGroups.find(g => g.id === appState.activeGroupId))) {
+    const userGroups = appState.groups.filter(g => {
+      const name = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : 'Người dùng';
+      return name === userName;
+    });
+    if (userGroups.length > 0) {
       appState.activeGroupId = userGroups[0].id;
     }
   }
@@ -256,14 +267,17 @@ function renderGroupSelect() {
   // Filter groups by selected User Tab
   let groupsToDisplay = appState.groups;
   if (appState.selectedUserTab !== 'ALL') {
-    groupsToDisplay = appState.groups.filter(g => (g.memberName || 'Chưa đặt tên') === appState.selectedUserTab);
+    groupsToDisplay = appState.groups.filter(g => {
+      const name = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : 'Người dùng';
+      return name === appState.selectedUserTab;
+    });
   }
 
-  groupsToDisplay.forEach(g => {
+  groupsToDisplay.forEach((g, idx) => {
     const option = document.createElement('option');
     option.value = g.id;
-    const memberStr = g.memberName ? `👤 ${g.memberName} - ` : '';
-    option.textContent = `${memberStr}${g.name} (${formatVND(g.baseAmount)})`;
+    const memberStr = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : `Người dùng ${idx + 1}`;
+    option.textContent = `👤 ${memberStr} | ${g.name} (${formatVND(g.baseAmount)})`;
     if (g.id === appState.activeGroupId) {
       option.selected = true;
     }
@@ -950,7 +964,9 @@ function openGroupModal(groupId = null) {
   } else {
     document.getElementById('groupModalTitle').textContent = 'Tạo Dây Họ Mới';
     document.getElementById('groupId').value = '';
-    document.getElementById('groupMemberNameInput').value = '';
+    // Pre-fill member name if a specific user tab is currently selected
+    const defaultUser = (appState.selectedUserTab && appState.selectedUserTab !== 'ALL') ? appState.selectedUserTab : '';
+    document.getElementById('groupMemberNameInput').value = defaultUser;
     document.getElementById('groupBaseAmountInput').value = '5.000.000';
     document.getElementById('groupTotalPeriods').value = 12;
   }
@@ -963,7 +979,11 @@ function handleGroupFormSubmit(e) {
 
   const id = document.getElementById('groupId').value;
   const name = document.getElementById('groupNameInput').value;
-  const memberName = document.getElementById('groupMemberNameInput').value;
+  let rawMemberName = document.getElementById('groupMemberNameInput').value;
+  
+  // Ensure non-empty memberName
+  const memberName = (rawMemberName && rawMemberName.trim()) ? rawMemberName.trim() : `Người dùng ${appState.groups.length + 1}`;
+  
   const baseAmount = parseVND(document.getElementById('groupBaseAmountInput').value);
   const periodType = document.getElementById('groupPeriodType').value;
   const totalPeriods = Number(document.getElementById('groupTotalPeriods').value) || 12;
@@ -1004,6 +1024,9 @@ function handleGroupFormSubmit(e) {
     appState.groups.push(newGroup);
     appState.activeGroupId = newGroup.id;
   }
+
+  // Switch focus to the saved user tab
+  appState.selectedUserTab = memberName;
 
   saveDataToStorage();
   closeModal('groupModal');

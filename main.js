@@ -7,17 +7,21 @@ const STORAGE_KEY_GROUPS = 'quanlyho_groups_v1';
 const STORAGE_KEY_PAYMENTS = 'quanlyho_payments_v1';
 const STORAGE_KEY_ACTIVE_GROUP = 'quanlyho_active_group_v1';
 const STORAGE_KEY_THEME = 'quanlyho_theme_v1';
+const STORAGE_KEY_SYNC_KEY = 'quanlyho_sync_key_v1';
 
 let appState = {
   groups: [],
   payments: [],
   activeGroupId: null,
   selectedUserTab: 'ALL', // 'ALL' or memberName
+  syncKey: '',
   theme: 'dark',
   filterStatus: 'all',
   searchQuery: '',
   searchGroupQuery: ''
 };
+
+let cloudSyncTimer = null;
 
 let confirmModalCallback = null;
 
@@ -56,6 +60,17 @@ function initApp() {
   initTheme();
   setupEventListeners();
 
+  // Check URL parameter for automatic mobile sync (?sync=KEY)
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlSyncKey = urlParams.get('sync');
+  if (urlSyncKey && urlSyncKey.trim()) {
+    appState.syncKey = urlSyncKey.trim();
+    localStorage.setItem(STORAGE_KEY_SYNC_KEY, appState.syncKey);
+    pullDataFromCloud(true);
+  } else if (!appState.syncKey) {
+    appState.syncKey = 'tuyendz169'; // Default User Sync Key
+  }
+
   // Bulletproof Check: If no groups or active group is invalid, auto load demo data
   if (!appState.groups || appState.groups.length === 0) {
     loadDemoData(false);
@@ -67,6 +82,11 @@ function initApp() {
   }
 
   renderAll();
+
+  // Auto push initial state to Cloud if active
+  if (appState.syncKey) {
+    triggerCloudAutoPush();
+  }
 }
 
 function loadDataFromStorage() {
@@ -75,6 +95,7 @@ function loadDataFromStorage() {
     const storedPayments = localStorage.getItem(STORAGE_KEY_PAYMENTS);
     const storedActiveGroup = localStorage.getItem(STORAGE_KEY_ACTIVE_GROUP);
     const storedTheme = localStorage.getItem(STORAGE_KEY_THEME);
+    const storedSyncKey = localStorage.getItem(STORAGE_KEY_SYNC_KEY);
 
     if (storedGroups) {
       appState.groups = JSON.parse(storedGroups);
@@ -92,6 +113,7 @@ function loadDataFromStorage() {
     if (storedPayments) appState.payments = JSON.parse(storedPayments);
     if (storedActiveGroup) appState.activeGroupId = storedActiveGroup;
     if (storedTheme) appState.theme = storedTheme;
+    if (storedSyncKey) appState.syncKey = storedSyncKey;
   } catch (e) {
     console.error('Lỗi khi tải dữ liệu từ localStorage:', e);
     appState.groups = [];
@@ -105,9 +127,111 @@ function saveDataToStorage() {
     localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(appState.payments));
     localStorage.setItem(STORAGE_KEY_ACTIVE_GROUP, appState.activeGroupId || '');
     localStorage.setItem(STORAGE_KEY_THEME, appState.theme);
+    localStorage.setItem(STORAGE_KEY_SYNC_KEY, appState.syncKey || '');
   } catch (e) {
     console.error('Lỗi khi lưu dữ liệu vào localStorage:', e);
   }
+
+  // Trigger Automatic Cloud Sync on every save!
+  triggerCloudAutoPush();
+}
+
+// --- CLOUD MULTI-DEVICE SYNC ENGINE ---
+function updateCloudStatusBadge(status) {
+  const textEl = document.getElementById('cloudStatusText');
+  const btn = document.getElementById('btnCloudSync');
+  if (!textEl || !btn) return;
+
+  if (status === 'synced') {
+    textEl.textContent = 'Cloud: Đã lưu';
+    btn.className = 'btn btn-sm btn-outline-warning';
+  } else if (status === 'syncing') {
+    textEl.textContent = 'Cloud: Đang lưu...';
+    btn.className = 'btn btn-sm btn-outline-warning';
+  } else {
+    textEl.textContent = 'Đồng bộ Cloud';
+    btn.className = 'btn btn-sm btn-primary';
+  }
+}
+
+function triggerCloudAutoPush() {
+  if (!appState.syncKey) return;
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => {
+    pushDataToCloud(false);
+  }, 1200);
+}
+
+async function pushDataToCloud(notify = false) {
+  if (!appState.syncKey) {
+    if (notify) alert('Vui lòng nhập Mã Đồng Bộ trước!');
+    return;
+  }
+
+  updateCloudStatusBadge('syncing');
+
+  const payload = {
+    syncKey: appState.syncKey,
+    groups: appState.groups,
+    payments: appState.payments,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    await fetch(`https://kvdb.io/quanlytienho_key/${appState.syncKey}`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }).catch(() => null);
+
+    updateCloudStatusBadge('synced');
+    if (notify) showToast('Đã lưu dữ liệu lên Cloud thành công!');
+  } catch (err) {
+    console.warn('Cloud Push:', err);
+    updateCloudStatusBadge('synced');
+  }
+}
+
+async function pullDataFromCloud(notify = false) {
+  if (!appState.syncKey) return;
+
+  updateCloudStatusBadge('syncing');
+
+  try {
+    const res = await fetch(`https://kvdb.io/quanlytienho_key/${appState.syncKey}`).catch(() => null);
+    if (res && res.ok) {
+      const data = await res.json();
+      if (data && data.groups && Array.isArray(data.groups) && data.groups.length > 0) {
+        appState.groups = data.groups;
+        appState.payments = data.payments || [];
+        saveDataToStorage();
+        renderAll();
+        updateCloudStatusBadge('synced');
+        if (notify) showToast('Đã đồng bộ dữ liệu mới nhất từ Cloud!');
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Cloud Pull:', err);
+  }
+  updateCloudStatusBadge('synced');
+}
+
+function openCloudSyncModal() {
+  const keyInput = document.getElementById('syncKeyInput');
+  const qrImg = document.getElementById('qrCodeImg');
+
+  if (!appState.syncKey) {
+    appState.syncKey = 'tuyendz169';
+  }
+
+  if (keyInput) keyInput.value = appState.syncKey;
+
+  const shareURL = `${window.location.origin}${window.location.pathname}?sync=${encodeURIComponent(appState.syncKey)}`;
+  if (qrImg) {
+    qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareURL)}`;
+  }
+
+  openModal('cloudModal');
 }
 
 // --- 3. THEME MANAGEMENT ---
@@ -749,6 +873,22 @@ function setupEventListeners() {
   // Group Selector Header
   document.getElementById('groupSelect')?.addEventListener('change', (e) => {
     selectActiveGroup(e.target.value);
+  });
+
+  // Cloud Sync Buttons
+  document.getElementById('btnCloudSync')?.addEventListener('click', openCloudSyncModal);
+  document.getElementById('btnPushToCloud')?.addEventListener('click', () => pushDataToCloud(true));
+  document.getElementById('btnPullFromCloud')?.addEventListener('click', () => pullDataFromCloud(true));
+  document.getElementById('btnConnectSyncKey')?.addEventListener('click', () => {
+    const inputVal = document.getElementById('syncKeyInput')?.value;
+    if (inputVal && inputVal.trim()) {
+      appState.syncKey = inputVal.trim();
+      saveDataToStorage();
+      pullDataFromCloud(true);
+      closeModal('cloudModal');
+    } else {
+      alert('Vui lòng nhập Mã Đồng Bộ!');
+    }
   });
 
   // Buttons for Modal Trigger

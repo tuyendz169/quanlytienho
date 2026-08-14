@@ -48,6 +48,9 @@
       </div>
 
       <div class="header-right">
+        <button id="btnCloudSync" class="btn btn-sm btn-primary" title="Đồng bộ máy tính & điện thoại">
+          <i data-lucide="cloud"></i> <span class="hide-mobile" id="cloudStatusText">Đồng bộ Cloud</span>
+        </button>
         <button id="btnDemoData" class="btn btn-sm btn-outline-warning" title="Nạp dữ liệu thử nghiệm">
           <i data-lucide="sparkles"></i> <span class="hide-mobile">Dữ liệu mẫu</span>
         </button>
@@ -505,6 +508,53 @@
               <p>Xóa tất cả các dây họ và lịch sử đóng (Khôi phục trạng thái ban đầu).</p>
             </div>
             <button id="btnClearAllData" class="btn btn-danger btn-sm">Xóa tất cả</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Cloud Multi-device Sync -->
+    <div id="cloudModal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3><i data-lucide="cloud"></i> Đồng Bộ Máy Tính ↔ Điện Thoại</h3>
+          <button class="modal-close" data-close-modal="cloudModal">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="backup-option-card">
+            <div class="option-icon icon-emerald"><i data-lucide="key"></i></div>
+            <div class="option-info">
+              <h4>Mã Đồng Bộ Đa Thiết Bị (Sync Key)</h4>
+              <p>Mã này dùng để kết nối dữ liệu giữa Máy tính và Điện thoại của bạn.</p>
+            </div>
+          </div>
+
+          <div class="form-group mt-2">
+            <label for="syncKeyInput">Tạo hoặc Nhập Mã Đồng Bộ (Viết liền không dấu)</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="syncKeyInput" placeholder="Ví dụ: tuyendz169" class="form-control" style="font-weight:700;" />
+              <button type="button" id="btnConnectSyncKey" class="btn btn-primary btn-sm">Kết Nối & Tải Dữ Liệu</button>
+            </div>
+          </div>
+
+          <!-- QR CODE BOX -->
+          <div class="qr-sync-box text-center p-3" style="background:var(--bg-hover); border-radius:var(--radius-md); margin-top:12px; padding: 16px; text-align: center;">
+            <h4 style="font-size:0.95rem; margin-bottom:6px;">📱 Mở Trên Điện Thoại Trong 3 Giây</h4>
+            <div id="qrCodeContainer" style="display:flex; justify-content:center; margin:10px 0;">
+              <img id="qrCodeImg" src="" alt="Mã QR Đồng bộ" style="width:160px; height:160px; border-radius:12px; border:2px solid var(--accent-emerald);" />
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-secondary);">Mở camera trên điện thoại quét mã QR để truy cập trang web đã tự động đồng bộ!</p>
+          </div>
+
+          <div class="modal-actions mt-3" style="display: flex; gap: 8px; justify-content: flex-end;">
+            <button type="button" id="btnPushToCloud" class="btn btn-primary btn-sm">
+              <i data-lucide="upload-cloud"></i> Lưu Lên Cloud Ngay
+            </button>
+            <button type="button" id="btnPullFromCloud" class="btn btn-secondary btn-sm">
+              <i data-lucide="download-cloud"></i> Cập Nhật Từ Cloud
+            </button>
           </div>
         </div>
       </div>

@@ -198,7 +198,7 @@ function renderAll() {
 }
 
 function renderUserTabs() {
-  const container = document.getElementById('userTabsContainer');
+  const container = document.getElementById('userSidebarList');
   if (!container) return;
 
   // Extract unique member names
@@ -212,8 +212,9 @@ function renderUserTabs() {
   const totalGroups = appState.groups.length;
 
   let html = `
-    <button class="user-tab-btn ${appState.selectedUserTab === 'ALL' ? 'active' : ''}" onclick="selectUserTab('ALL')">
-      <i data-lucide="users"></i> Tất cả người dùng <span class="user-tab-count">${totalGroups}</span>
+    <button class="sidebar-user-item ${appState.selectedUserTab === 'ALL' ? 'active' : ''}" onclick="selectUserTab('ALL')">
+      <span><i data-lucide="users"></i> Tất cả người dùng</span>
+      <span class="sidebar-user-badge">${totalGroups}</span>
     </button>
   `;
 
@@ -221,8 +222,9 @@ function renderUserTabs() {
     const isSelected = appState.selectedUserTab === uName;
     const count = userMap[uName];
     html += `
-      <button class="user-tab-btn ${isSelected ? 'active' : ''}" onclick="selectUserTab('${uName.replace(/'/g, "\\'")}')">
-        <i data-lucide="user"></i> ${uName} <span class="user-tab-count">${count} dây</span>
+      <button class="sidebar-user-item ${isSelected ? 'active' : ''}" onclick="selectUserTab('${uName.replace(/'/g, "\\'")}')">
+        <span><i data-lucide="user"></i> ${uName}</span>
+        <span class="sidebar-user-badge">${count} dây</span>
       </button>
     `;
   });
@@ -655,6 +657,7 @@ function setupEventListeners() {
 
   // Buttons for Modal Trigger
   document.getElementById('btnNewGroupHeader')?.addEventListener('click', () => openGroupModal());
+  document.getElementById('btnSidebarAddGroup')?.addEventListener('click', () => openGroupModal());
   document.getElementById('btnAddNewGroupTab')?.addEventListener('click', () => openGroupModal());
   document.getElementById('btnEditCurrentGroup')?.addEventListener('click', () => openEditGroupModal(appState.activeGroupId));
   document.getElementById('btnAddPeriod')?.addEventListener('click', () => openPaymentModal());

@@ -61,20 +61,25 @@
       </div>
     </header>
 
-    <!-- Main Content Area -->
-    <main class="app-main">
-      <!-- User Switcher Tabs Bar -->
-      <section class="user-tabs-wrapper mb-3">
-        <div class="user-tabs-header">
-          <span class="user-tabs-label"><i data-lucide="users"></i> Chọn Người Dùng:</span>
-          <div class="user-tabs-scroll" id="userTabsContainer">
-            <!-- Dynamic User Tabs -->
-          </div>
+    <!-- Main Content Area with Left Sidebar Layout -->
+    <div class="app-layout">
+      <!-- Left User Sidebar (Mục khoanh đỏ bên trái) -->
+      <aside class="user-sidebar">
+        <div class="sidebar-header">
+          <h3><i data-lucide="users"></i> NGƯỜI DÙNG</h3>
+          <button id="btnSidebarAddGroup" class="btn btn-icon btn-ghost btn-sm" title="Tạo Dây Họ / Người Dùng Mới">
+            <i data-lucide="plus"></i>
+          </button>
         </div>
-      </section>
+        <div class="user-sidebar-list" id="userSidebarList">
+          <!-- Dynamic Users Rendered Here -->
+        </div>
+      </aside>
 
-      <!-- Active Group Info Banner -->
-      <section class="group-banner">
+      <!-- Main Content Right Area -->
+      <main class="app-main">
+        <!-- Active Group Info Banner -->
+        <section class="group-banner">
         <div class="banner-info">
           <h2 id="currentGroupName">Dây Họ 5 Triệu (Tháng)</h2>
           <p id="currentGroupMeta" class="meta-text">Mức đóng quy định: <strong id="baseAmountDisplay">5.000.000 đ</strong> / kỳ • Chu kỳ: <span id="periodDisplay">Hàng tháng</span></p>
@@ -265,6 +270,7 @@
         </div>
       </section>
     </main>
+  </div>
 
     <!-- Mobile Floating Add Button -->
     <button id="fabAddPeriod" class="fab-btn" title="Thêm kỳ đóng">

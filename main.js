@@ -56,22 +56,17 @@ function initApp() {
   initTheme();
   setupEventListeners();
 
-  // If no group exists, load demo data or prompt
-  if (appState.groups.length === 0) {
-    loadDemoData(false); // Load sample silently on first run
+  // Bulletproof Check: If no groups or active group is invalid, auto load demo data
+  if (!appState.groups || appState.groups.length === 0) {
+    loadDemoData(false);
   } else {
-    // Ensure active group is valid
-    if (!appState.activeGroupId || !appState.groups.find(g => g.id === appState.activeGroupId)) {
+    const validActive = appState.groups.find(g => g.id === appState.activeGroupId);
+    if (!validActive) {
       appState.activeGroupId = appState.groups[0].id;
     }
   }
 
   renderAll();
-  
-  // Refresh Lucide icons
-  if (window.lucide) {
-    window.lucide.createIcons();
-  }
 }
 
 function loadDataFromStorage() {
@@ -83,18 +78,24 @@ function loadDataFromStorage() {
 
     if (storedGroups) {
       appState.groups = JSON.parse(storedGroups);
-      // Data Sanitization: Ensure all existing groups have a memberName
-      appState.groups.forEach((g, idx) => {
-        if (!g.memberName || !g.memberName.trim()) {
-          g.memberName = `Người dùng ${idx + 1}`;
-        }
-      });
+      if (Array.isArray(appState.groups)) {
+        appState.groups.forEach((g, idx) => {
+          if (!g.memberName || !g.memberName.trim()) {
+            g.memberName = `Người dùng ${idx + 1}`;
+          }
+        });
+      } else {
+        appState.groups = [];
+      }
     }
+
     if (storedPayments) appState.payments = JSON.parse(storedPayments);
     if (storedActiveGroup) appState.activeGroupId = storedActiveGroup;
     if (storedTheme) appState.theme = storedTheme;
   } catch (e) {
     console.error('Lỗi khi tải dữ liệu từ localStorage:', e);
+    appState.groups = [];
+    appState.payments = [];
   }
 }
 
@@ -118,19 +119,21 @@ function toggleTheme() {
   appState.theme = appState.theme === 'dark' ? 'light' : 'dark';
   initTheme();
   saveDataToStorage();
-  renderCharts(); // Re-render charts for theme colors
+  renderCharts();
   showToast(`Đã chuyển sang giao diện ${appState.theme === 'dark' ? 'Tối' : 'Sáng'}`);
 }
 
 // --- 4. CORE COMPUTATION & CALCULATIONS ---
 function getActiveGroup() {
-  return appState.groups.find(g => g.id === appState.activeGroupId) || null;
+  if (!appState.groups || appState.groups.length === 0) return null;
+  return appState.groups.find(g => g.id === appState.activeGroupId) || appState.groups[0];
 }
 
 function getActivePayments() {
-  if (!appState.activeGroupId) return [];
+  const activeGroup = getActiveGroup();
+  if (!activeGroup) return [];
   return appState.payments
-    .filter(p => p.groupId === appState.activeGroupId)
+    .filter(p => p.groupId === activeGroup.id)
     .sort((a, b) => Number(a.periodNumber) - Number(b.periodNumber));
 }
 
@@ -142,11 +145,8 @@ function getProcessedPayments() {
   return rawPayments.map(payment => {
     const base = Number(payment.baseAmount) || 0;
     const actual = Number(payment.actualAmount) || 0;
-    
-    // Formula requested by User: Monthly Interest = Base Amount - Actual Amount Paid
     const monthlyInterest = base - actual;
 
-    // Cumulative interest sums up for paid or won periods
     if (payment.status === 'paid' || payment.status === 'won') {
       cumulativeInterest += monthlyInterest;
     }
@@ -192,7 +192,14 @@ function computeKPIs() {
 
 // --- 5. RENDER FUNCTIONS ---
 function renderAll() {
+  // Guarantee demo data if state is empty
+  if (!appState.groups || appState.groups.length === 0) {
+    loadDemoData(false);
+    return;
+  }
+
   renderUserTabs();
+  renderSidebarGroupList();
   renderGroupSelect();
   renderGroupBanner();
   renderKPIs();
@@ -209,54 +216,109 @@ function renderUserTabs() {
   const container = document.getElementById('userSidebarList');
   if (!container) return;
 
+  if (!appState.groups || appState.groups.length === 0) {
+    loadDemoData(false);
+  }
+
   // Extract unique member names with fallback
   const userMap = {};
   appState.groups.forEach((g, idx) => {
-    const name = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : `Người dùng ${idx + 1}`;
+    let name = (g.memberName && typeof g.memberName === 'string' && g.memberName.trim()) ? g.memberName.trim() : '';
+    if (!name) {
+      name = `Người dùng ${idx + 1}`;
+      g.memberName = name;
+    }
     userMap[name] = (userMap[name] || 0) + 1;
   });
 
   const uniqueUsers = Object.keys(userMap);
   const totalGroups = appState.groups.length;
 
-  let html = `
-    <button class="sidebar-user-item ${appState.selectedUserTab === 'ALL' ? 'active' : ''}" onclick="selectUserTab('ALL')">
-      <span><i data-lucide="users"></i> Tất cả người dùng</span>
-      <span class="sidebar-user-badge">${totalGroups}</span>
-    </button>
-  `;
+  container.innerHTML = '';
 
+  // 1. "Tất cả người dùng" Button
+  const allBtn = document.createElement('button');
+  allBtn.className = `sidebar-user-item ${appState.selectedUserTab === 'ALL' ? 'active' : ''}`;
+  allBtn.innerHTML = `
+    <span><i data-lucide="users"></i> Tất cả người dùng</span>
+    <span class="sidebar-user-badge">${totalGroups}</span>
+  `;
+  allBtn.onclick = () => selectUserTab('ALL');
+  container.appendChild(allBtn);
+
+  // 2. Individual User Items
   uniqueUsers.forEach(uName => {
     const isSelected = appState.selectedUserTab === uName;
     const count = userMap[uName];
-    html += `
-      <button class="sidebar-user-item ${isSelected ? 'active' : ''}" onclick="selectUserTab('${uName.replace(/'/g, "\\'")}')">
-        <span><i data-lucide="user"></i> ${uName}</span>
-        <span class="sidebar-user-badge">${count} dây</span>
-      </button>
+    
+    const userBtn = document.createElement('button');
+    userBtn.className = `sidebar-user-item ${isSelected ? 'active' : ''}`;
+    userBtn.innerHTML = `
+      <span><i data-lucide="user"></i> ${uName}</span>
+      <span class="sidebar-user-badge">${count} dây</span>
     `;
+    userBtn.onclick = () => selectUserTab(uName);
+    container.appendChild(userBtn);
   });
-
-  container.innerHTML = html;
 }
 
-window.selectUserTab = function(userName) {
-  appState.selectedUserTab = userName;
-  
-  // Auto switch active group to the first group belonging to this user
-  if (userName !== 'ALL') {
-    const userGroups = appState.groups.filter(g => {
-      const name = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : 'Người dùng';
-      return name === userName;
-    });
-    if (userGroups.length > 0) {
-      appState.activeGroupId = userGroups[0].id;
-    }
+function renderSidebarGroupList() {
+  const container = document.getElementById('sidebarGroupList');
+  const titleEl = document.getElementById('sidebarGroupListTitle');
+  if (!container) return;
+
+  if (titleEl) {
+    const label = appState.selectedUserTab === 'ALL' ? 'DÂY HỌ (TẤT CẢ)' : `DÂY HỌ (${appState.selectedUserTab})`;
+    titleEl.innerHTML = `<i data-lucide="layers"></i> ${label}`;
   }
 
-  saveDataToStorage();
-  renderAll();
-};
+  let groupsToRender = appState.groups;
+  if (appState.selectedUserTab !== 'ALL') {
+    groupsToRender = appState.groups.filter(g => (g.memberName || '').trim() === appState.selectedUserTab);
+  }
+
+  container.innerHTML = '';
+
+  if (groupsToRender.length === 0) {
+    container.innerHTML = `<div style="font-size:0.8rem; color:var(--text-muted); padding: 8px 0;">Chưa có dây họ nào</div>`;
+    return;
+  }
+
+  groupsToRender.forEach(g => {
+    const isCurrent = g.id === appState.activeGroupId;
+    const groupPayments = appState.payments.filter(p => p.groupId === g.id);
+    const paidCount = groupPayments.filter(p => p.status === 'paid' || p.status === 'won').length;
+
+    const item = document.createElement('div');
+    item.className = `sidebar-group-item ${isCurrent ? 'active' : ''}`;
+    item.onclick = (e) => {
+      if (e.target.closest('.s-group-actions')) return;
+      selectActiveGroup(g.id);
+    };
+
+    item.innerHTML = `
+      <div class="s-group-top">
+        <span class="s-group-title">${g.name}</span>
+        ${isCurrent ? '<span class="badge-status status-paid" style="font-size:0.7rem; padding:2px 6px;">Đang chọn</span>' : ''}
+      </div>
+      <div class="s-group-meta">
+        <span>${formatVND(g.baseAmount)}</span>
+        <span>${paidCount}/${g.totalPeriods || 12} kỳ</span>
+      </div>
+      <div class="s-group-actions mt-1" style="display:flex; justify-content:flex-end; gap:4px;">
+        <button class="btn btn-icon btn-ghost btn-sm" onclick="event.stopPropagation(); openEditGroupModal('${g.id}')" title="Sửa dây này">
+          <i data-lucide="edit-2" style="width:14px; height:14px;"></i>
+        </button>
+        ${appState.groups.length > 1 ? `
+          <button class="btn btn-icon btn-ghost btn-sm text-rose" onclick="event.stopPropagation(); deleteGroup('${g.id}')" title="Xóa dây này">
+            <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
+          </button>
+        ` : ''}
+      </div>
+    `;
+    container.appendChild(item);
+  });
+}
 
 function renderGroupSelect() {
   const select = document.getElementById('groupSelect');
@@ -264,13 +326,27 @@ function renderGroupSelect() {
 
   select.innerHTML = '';
   
-  // Filter groups by selected User Tab
   let groupsToDisplay = appState.groups;
   if (appState.selectedUserTab !== 'ALL') {
-    groupsToDisplay = appState.groups.filter(g => {
+    const filtered = appState.groups.filter(g => {
       const name = (g.memberName && g.memberName.trim()) ? g.memberName.trim() : 'Người dùng';
       return name === appState.selectedUserTab;
     });
+    if (filtered.length > 0) {
+      groupsToDisplay = filtered;
+    }
+  }
+
+  if (!groupsToDisplay || groupsToDisplay.length === 0) {
+    groupsToDisplay = appState.groups;
+  }
+
+  if (!groupsToDisplay || groupsToDisplay.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '-- Chưa có Dây Họ --';
+    select.appendChild(option);
+    return;
   }
 
   groupsToDisplay.forEach((g, idx) => {
@@ -550,112 +626,118 @@ function renderGroupListTab() {
 
 // --- 6. CHART.JS VISUAL ANALYTICS ---
 function renderCharts() {
-  const processed = getProcessedPayments();
-  const isDark = appState.theme === 'dark';
-  const textColor = isDark ? '#94a3b8' : '#475569';
-  const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+  try {
+    if (typeof Chart === 'undefined') return;
 
-  // Chart 1: Cumulative Interest Line Chart
-  const ctxLine = document.getElementById('chartCumulativeInterest')?.getContext('2d');
-  if (ctxLine) {
-    if (interestChartInstance) interestChartInstance.destroy();
+    const processed = getProcessedPayments();
+    const isDark = appState.theme === 'dark';
+    const textColor = isDark ? '#94a3b8' : '#475569';
+    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
 
-    const labels = processed.map(p => `Kỳ ${p.periodNumber}`);
-    const dataInterest = processed.map(p => p.cumulativeInterest);
+    // Chart 1: Cumulative Interest Line Chart
+    const ctxLine = document.getElementById('chartCumulativeInterest')?.getContext('2d');
+    if (ctxLine) {
+      if (interestChartInstance) interestChartInstance.destroy();
 
-    interestChartInstance = new Chart(ctxLine, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'Lãi Cộng Dồn (VNĐ)',
-          data: dataInterest,
-          borderColor: '#10b981',
-          backgroundColor: 'rgba(16, 185, 129, 0.15)',
-          fill: true,
-          tension: 0.35,
-          borderWidth: 3,
-          pointRadius: 4,
-          pointHoverRadius: 7,
-          pointBackgroundColor: '#10b981'
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: (context) => ` Lãi cộng dồn: ${formatVND(context.raw)}`
-            }
-          }
+      const labels = processed.map(p => `Kỳ ${p.periodNumber}`);
+      const dataInterest = processed.map(p => p.cumulativeInterest);
+
+      interestChartInstance = new Chart(ctxLine, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Lãi Cộng Dồn (VNĐ)',
+            data: dataInterest,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.15)',
+            fill: true,
+            tension: 0.35,
+            borderWidth: 3,
+            pointRadius: 4,
+            pointHoverRadius: 7,
+            pointBackgroundColor: '#10b981'
+          }]
         },
-        scales: {
-          x: { ticks: { color: textColor }, grid: { color: gridColor } },
-          y: {
-            ticks: {
-              color: textColor,
-              callback: (value) => value >= 1000000 ? (value / 1000000) + 'Tr' : (value / 1000) + 'k'
-            },
-            grid: { color: gridColor }
-          }
-        }
-      }
-    });
-  }
-
-  // Chart 2: Comparison Bar Chart
-  const ctxBar = document.getElementById('chartComparison')?.getContext('2d');
-  if (ctxBar) {
-    if (comparisonChartInstance) comparisonChartInstance.destroy();
-
-    const labels = processed.map(p => `Kỳ ${p.periodNumber}`);
-    const baseData = processed.map(p => p.baseAmount);
-    const actualData = processed.map(p => p.actualAmount);
-
-    comparisonChartInstance = new Chart(ctxBar, {
-      type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: 'Mức Chuẩn',
-            data: baseData,
-            backgroundColor: 'rgba(139, 92, 246, 0.6)',
-            borderRadius: 6
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (context) => ` Lãi cộng dồn: ${formatVND(context.raw)}`
+              }
+            }
           },
-          {
-            label: 'Thực Đóng',
-            data: actualData,
-            backgroundColor: 'rgba(59, 130, 246, 0.85)',
-            borderRadius: 6
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { labels: { color: textColor } },
-          tooltip: {
-            callbacks: {
-              label: (context) => ` ${context.dataset.label}: ${formatVND(context.raw)}`
+          scales: {
+            x: { ticks: { color: textColor }, grid: { color: gridColor } },
+            y: {
+              ticks: {
+                color: textColor,
+                callback: (value) => value >= 1000000 ? (value / 1000000) + 'Tr' : (value / 1000) + 'k'
+              },
+              grid: { color: gridColor }
             }
           }
-        },
-        scales: {
-          x: { ticks: { color: textColor }, grid: { color: gridColor } },
-          y: {
-            ticks: {
-              color: textColor,
-              callback: (value) => value >= 1000000 ? (value / 1000000) + 'Tr' : (value / 1000) + 'k'
+        }
+      });
+    }
+
+    // Chart 2: Comparison Bar Chart
+    const ctxBar = document.getElementById('chartComparison')?.getContext('2d');
+    if (ctxBar) {
+      if (comparisonChartInstance) comparisonChartInstance.destroy();
+
+      const labels = processed.map(p => `Kỳ ${p.periodNumber}`);
+      const baseData = processed.map(p => p.baseAmount);
+      const actualData = processed.map(p => p.actualAmount);
+
+      comparisonChartInstance = new Chart(ctxBar, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Mức Chuẩn',
+              data: baseData,
+              backgroundColor: 'rgba(139, 92, 246, 0.6)',
+              borderRadius: 6
             },
-            grid: { color: gridColor }
+            {
+              label: 'Thực Đóng',
+              data: actualData,
+              backgroundColor: 'rgba(59, 130, 246, 0.85)',
+              borderRadius: 6
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: textColor } },
+            tooltip: {
+              callbacks: {
+                label: (context) => ` ${context.dataset.label}: ${formatVND(context.raw)}`
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: textColor }, grid: { color: gridColor } },
+            y: {
+              ticks: {
+                color: textColor,
+                callback: (value) => value >= 1000000 ? (value / 1000000) + 'Tr' : (value / 1000) + 'k'
+              },
+              grid: { color: gridColor }
+            }
           }
         }
-      }
-    });
+      });
+    }
+  } catch (err) {
+    console.warn('Chart rendering caught exception silently:', err);
   }
 }
 
@@ -671,6 +753,7 @@ function setupEventListeners() {
 
   // Buttons for Modal Trigger
   document.getElementById('btnNewGroupHeader')?.addEventListener('click', () => openGroupModal());
+  document.getElementById('btnSidebarAddUser')?.addEventListener('click', () => openGroupModal());
   document.getElementById('btnSidebarAddGroup')?.addEventListener('click', () => openGroupModal());
   document.getElementById('btnAddNewGroupTab')?.addEventListener('click', () => openGroupModal());
   document.getElementById('btnEditCurrentGroup')?.addEventListener('click', () => openEditGroupModal(appState.activeGroupId));

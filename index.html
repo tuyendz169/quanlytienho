@@ -63,16 +63,32 @@
 
     <!-- Main Content Area with Left Sidebar Layout -->
     <div class="app-layout">
-      <!-- Left User Sidebar (Mục khoanh đỏ bên trái) -->
+      <!-- Left User & Group Sidebar -->
       <aside class="user-sidebar">
-        <div class="sidebar-header">
-          <h3><i data-lucide="users"></i> NGƯỜI DÙNG</h3>
-          <button id="btnSidebarAddGroup" class="btn btn-icon btn-ghost btn-sm" title="Tạo Dây Họ / Người Dùng Mới">
-            <i data-lucide="plus"></i>
-          </button>
+        <!-- Section 1: Danh sách Người Dùng -->
+        <div class="sidebar-section">
+          <div class="sidebar-header">
+            <h3><i data-lucide="users"></i> NGƯỜI DÙNG</h3>
+            <button id="btnSidebarAddUser" class="btn btn-icon btn-ghost btn-sm" title="Tạo Người Dùng / Dây Họ Mới">
+              <i data-lucide="plus"></i>
+            </button>
+          </div>
+          <div class="user-sidebar-list" id="userSidebarList">
+            <!-- Dynamic Users Rendered Here -->
+          </div>
         </div>
-        <div class="user-sidebar-list" id="userSidebarList">
-          <!-- Dynamic Users Rendered Here -->
+
+        <!-- Section 2: Danh sách Dây Họ (Bên trái dưới phần người dùng) -->
+        <div class="sidebar-section mt-4">
+          <div class="sidebar-header">
+            <h3 id="sidebarGroupListTitle"><i data-lucide="layers"></i> DÂY HỌ</h3>
+            <button id="btnSidebarAddGroup" class="btn btn-icon btn-ghost btn-sm text-emerald" title="Tạo Dây Họ Mới">
+              <i data-lucide="plus-circle"></i>
+            </button>
+          </div>
+          <div class="sidebar-group-list" id="sidebarGroupList">
+            <!-- Dynamic Groups Rendered Here -->
+          </div>
         </div>
       </aside>
 

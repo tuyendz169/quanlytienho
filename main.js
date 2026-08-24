@@ -364,7 +364,9 @@ function startAutoSyncEngine() {
   });
 }
 
-function openCloudSyncModal() {
+function openCloudSyncModal(triggerPush = false) {
+  closeModal('exportModal');
+
   const keyInput = document.getElementById('syncKeyInput');
   if (!appState.syncKey) {
     appState.syncKey = 'tuyendz169';
@@ -373,6 +375,10 @@ function openCloudSyncModal() {
 
   updateCloudQRCode();
   openModal('cloudModal');
+
+  if (triggerPush && appState.syncKey) {
+    pushDataToCloud(true);
+  }
 }
 
 function updateCloudQRCode() {
@@ -384,8 +390,8 @@ function updateCloudQRCode() {
   qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(shareURL)}`;
 }
 
-window.openCloudSyncModal = function () {
-  openCloudSyncModal();
+window.openCloudSyncModal = function (triggerPush = false) {
+  openCloudSyncModal(triggerPush);
 };
 
 // --- 3. THEME MANAGEMENT ---
@@ -1032,10 +1038,7 @@ function setupEventListeners() {
   // Cloud Sync Buttons
   document.getElementById('btnCloudSync')?.addEventListener('click', (e) => {
     e.preventDefault();
-    openCloudSyncModal();
-    if (appState.syncKey) {
-      pushDataToCloud(true);
-    }
+    openCloudSyncModal(true);
   });
   document.getElementById('btnPushToCloud')?.addEventListener('click', () => pushDataToCloud(true));
   document.getElementById('btnPullFromCloud')?.addEventListener('click', () => pullDataFromCloud(true, true));

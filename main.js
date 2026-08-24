@@ -8,6 +8,7 @@ const STORAGE_KEY_PAYMENTS = 'quanlyho_payments_v1';
 const STORAGE_KEY_ACTIVE_GROUP = 'quanlyho_active_group_v1';
 const STORAGE_KEY_THEME = 'quanlyho_theme_v1';
 const STORAGE_KEY_SYNC_KEY = 'quanlyho_sync_key_v1';
+const STORAGE_KEY_UPDATED_AT = 'quanlyho_updated_at_v1';
 
 let appState = {
   groups: [],
@@ -18,10 +19,12 @@ let appState = {
   theme: 'dark',
   filterStatus: 'all',
   searchQuery: '',
-  searchGroupQuery: ''
+  searchGroupQuery: '',
+  lastUpdatedAt: null
 };
 
 let cloudSyncTimer = null;
+let isSyncing = false;
 
 let confirmModalCallback = null;
 
@@ -40,7 +43,6 @@ function parseVND(str) {
   const raw = String(str).replace(/[^\d]/g, '');
   return parseInt(raw, 10) || 0;
 }
-
 // Helper: Format Date
 function formatDate(dateStr) {
   if (!dateStr) return '';
@@ -66,27 +68,28 @@ function initApp() {
   if (urlSyncKey && urlSyncKey.trim()) {
     appState.syncKey = urlSyncKey.trim();
     localStorage.setItem(STORAGE_KEY_SYNC_KEY, appState.syncKey);
-    pullDataFromCloud(true);
   } else if (!appState.syncKey) {
     appState.syncKey = 'tuyendz169'; // Default User Sync Key
   }
 
-  // Bulletproof Check: If no groups or active group is invalid, auto load demo data
-  if (!appState.groups || appState.groups.length === 0) {
-    loadDemoData(false);
-  } else {
-    const validActive = appState.groups.find(g => g.id === appState.activeGroupId);
-    if (!validActive) {
-      appState.activeGroupId = appState.groups[0].id;
-    }
-  }
-
+  // Render initial local state immediately
   renderAll();
 
-  // Auto push initial state to Cloud if active
+  // Automatic Cloud Pull on startup if syncKey exists
   if (appState.syncKey) {
-    triggerCloudAutoPush();
+    pullDataFromCloud(false, true).then((pulled) => {
+      if (!pulled && (!appState.groups || appState.groups.length === 0)) {
+        loadDemoData(false);
+        renderAll();
+      }
+    });
+  } else if (!appState.groups || appState.groups.length === 0) {
+    loadDemoData(false);
+    renderAll();
   }
+
+  // Start background auto-sync engine
+  startAutoSyncEngine();
 }
 
 function loadDataFromStorage() {
@@ -96,6 +99,7 @@ function loadDataFromStorage() {
     const storedActiveGroup = localStorage.getItem(STORAGE_KEY_ACTIVE_GROUP);
     const storedTheme = localStorage.getItem(STORAGE_KEY_THEME);
     const storedSyncKey = localStorage.getItem(STORAGE_KEY_SYNC_KEY);
+    const storedUpdatedAt = localStorage.getItem(STORAGE_KEY_UPDATED_AT);
 
     if (storedGroups) {
       appState.groups = JSON.parse(storedGroups);
@@ -114,6 +118,7 @@ function loadDataFromStorage() {
     if (storedActiveGroup) appState.activeGroupId = storedActiveGroup;
     if (storedTheme) appState.theme = storedTheme;
     if (storedSyncKey) appState.syncKey = storedSyncKey;
+    if (storedUpdatedAt) appState.lastUpdatedAt = storedUpdatedAt;
   } catch (e) {
     console.error('Lỗi khi tải dữ liệu từ localStorage:', e);
     appState.groups = [];
@@ -121,23 +126,29 @@ function loadDataFromStorage() {
   }
 }
 
-function saveDataToStorage() {
+function saveDataToStorage(triggerPush = true) {
+  appState.lastUpdatedAt = new Date().toISOString();
   try {
     localStorage.setItem(STORAGE_KEY_GROUPS, JSON.stringify(appState.groups));
     localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(appState.payments));
     localStorage.setItem(STORAGE_KEY_ACTIVE_GROUP, appState.activeGroupId || '');
     localStorage.setItem(STORAGE_KEY_THEME, appState.theme);
     localStorage.setItem(STORAGE_KEY_SYNC_KEY, appState.syncKey || '');
+    localStorage.setItem(STORAGE_KEY_UPDATED_AT, appState.lastUpdatedAt);
   } catch (e) {
     console.error('Lỗi khi lưu dữ liệu vào localStorage:', e);
   }
 
-  // Trigger Automatic Cloud Sync on every save!
-  triggerCloudAutoPush();
+  if (triggerPush) {
+    triggerCloudAutoPush();
+  }
 }
 
 // --- CLOUD MULTI-DEVICE SYNC ENGINE ---
-function updateCloudStatusBadge(status) {
+const GLOBAL_CLOUD_INDEX_ID = 'ff8081819ff5b11001a032a3fd850a49';
+const CLOUD_API_ENDPOINT = `https://api.restful-api.dev/objects/${GLOBAL_CLOUD_INDEX_ID}`;
+
+function updateCloudStatusBadge(status, errorMsg = '') {
   const textEl = document.getElementById('cloudStatusText');
   const btn = document.getElementById('btnCloudSync');
   if (!textEl || !btn) return;
@@ -145,9 +156,15 @@ function updateCloudStatusBadge(status) {
   if (status === 'synced') {
     textEl.textContent = 'Cloud: Đã lưu';
     btn.className = 'btn btn-sm btn-outline-warning';
+    btn.title = 'Đồng bộ Cloud (Đã lưu dữ liệu mới nhất)';
   } else if (status === 'syncing') {
     textEl.textContent = 'Cloud: Đang lưu...';
     btn.className = 'btn btn-sm btn-outline-warning';
+    btn.title = 'Đang đồng bộ dữ liệu...';
+  } else if (status === 'error') {
+    textEl.textContent = 'Cloud: Thử lại';
+    btn.className = 'btn btn-sm btn-danger';
+    btn.title = errorMsg || 'Lỗi kết nối Cloud. Bấm để thử lại.';
   } else {
     textEl.textContent = 'Đồng bộ Cloud';
     btn.className = 'btn btn-sm btn-primary';
@@ -159,82 +176,176 @@ function triggerCloudAutoPush() {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
     pushDataToCloud(false);
-  }, 1200);
+  }, 800);
+}
+
+async function fetchCloudIndex() {
+  const res = await fetch(CLOUD_API_ENDPOINT, {
+    method: 'GET',
+    headers: { 'Accept': 'application/json' }
+  });
+  if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+  const json = await res.json();
+  return {
+    name: json.name || 'quanlytienho_global_sync_v1',
+    data: json.data || {}
+  };
 }
 
 async function pushDataToCloud(notify = false) {
   if (!appState.syncKey) {
     if (notify) alert('Vui lòng nhập Mã Đồng Bộ trước!');
-    return;
+    return false;
   }
 
+  if (isSyncing) return false;
+  isSyncing = true;
   updateCloudStatusBadge('syncing');
+
+  const nowIso = new Date().toISOString();
+  appState.lastUpdatedAt = nowIso;
+  try {
+    localStorage.setItem(STORAGE_KEY_UPDATED_AT, nowIso);
+  } catch (e) {}
 
   const payload = {
     syncKey: appState.syncKey,
     groups: appState.groups,
     payments: appState.payments,
-    updatedAt: new Date().toISOString()
+    updatedAt: nowIso
   };
 
   try {
-    await fetch(`https://kvdb.io/quanlytienho_key/${appState.syncKey}`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }).catch(() => null);
+    let indexObj;
+    try {
+      indexObj = await fetchCloudIndex();
+    } catch (e) {
+      indexObj = { name: 'quanlytienho_global_sync_v1', data: {} };
+    }
+
+    if (!indexObj.data) indexObj.data = {};
+    indexObj.data[appState.syncKey] = payload;
+
+    const putRes = await fetch(CLOUD_API_ENDPOINT, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        name: indexObj.name,
+        data: indexObj.data
+      })
+    });
+
+    if (!putRes.ok) {
+      throw new Error(`Cập nhật Cloud thất bại (${putRes.status})`);
+    }
 
     updateCloudStatusBadge('synced');
-    if (notify) showToast('Đã lưu dữ liệu lên Cloud thành công!');
+    if (notify) showToast('✅ Đã lưu dữ liệu lên Cloud thành công!');
+    isSyncing = false;
+    return true;
   } catch (err) {
-    console.warn('Cloud Push:', err);
-    updateCloudStatusBadge('synced');
+    console.error('Cloud Push error:', err);
+    updateCloudStatusBadge('error', 'Lỗi kết nối Cloud');
+    if (notify) showToast('❌ Lỗi kết nối Cloud: ' + err.message);
+    isSyncing = false;
+    return false;
   }
 }
 
-async function pullDataFromCloud(notify = false) {
-  if (!appState.syncKey) return;
+async function pullDataFromCloud(notify = false, forceReplace = false) {
+  if (!appState.syncKey) return false;
 
   updateCloudStatusBadge('syncing');
 
   try {
-    const res = await fetch(`https://kvdb.io/quanlytienho_key/${appState.syncKey}`).catch(() => null);
-    if (res && res.ok) {
-      const data = await res.json();
-      if (data && data.groups && Array.isArray(data.groups) && data.groups.length > 0) {
-        appState.groups = data.groups;
-        appState.payments = data.payments || [];
-        saveDataToStorage();
+    const indexObj = await fetchCloudIndex();
+    const remoteRecord = indexObj.data ? indexObj.data[appState.syncKey] : null;
+
+    if (remoteRecord && remoteRecord.groups && Array.isArray(remoteRecord.groups) && remoteRecord.groups.length > 0) {
+      const remoteTime = remoteRecord.updatedAt ? new Date(remoteRecord.updatedAt).getTime() : 0;
+      const localTime = appState.lastUpdatedAt ? new Date(appState.lastUpdatedAt).getTime() : 0;
+
+      if (forceReplace || remoteTime > localTime || !appState.groups || appState.groups.length === 0) {
+        const previousActive = appState.activeGroupId;
+        appState.groups = remoteRecord.groups;
+        appState.payments = remoteRecord.payments || [];
+        appState.lastUpdatedAt = remoteRecord.updatedAt || new Date().toISOString();
+
+        if (!appState.groups.some(g => g.id === appState.activeGroupId)) {
+          if (previousActive && appState.groups.some(g => g.id === previousActive)) {
+            appState.activeGroupId = previousActive;
+          } else {
+            appState.activeGroupId = appState.groups[0]?.id || null;
+          }
+        }
+
+        saveDataToStorage(false);
         renderAll();
         updateCloudStatusBadge('synced');
-        if (notify) showToast('Đã đồng bộ dữ liệu mới nhất từ Cloud!');
-        return;
+        if (notify) {
+          showToast('📱 Đã đồng bộ dữ liệu mới nhất từ Cloud!');
+        }
+        return true;
+      }
+    } else {
+      if (appState.groups && appState.groups.length > 0) {
+        await pushDataToCloud(false);
       }
     }
+    updateCloudStatusBadge('synced');
+    return true;
   } catch (err) {
-    console.warn('Cloud Pull:', err);
+    console.warn('Cloud Pull error:', err);
+    updateCloudStatusBadge('synced');
+    if (notify) showToast('⚠️ Không thể tải từ Cloud: ' + err.message);
+    return false;
   }
-  updateCloudStatusBadge('synced');
+}
+
+function startAutoSyncEngine() {
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && appState.syncKey && !isSyncing) {
+      pullDataFromCloud(false, false);
+    }
+  }, 8000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && appState.syncKey && !isSyncing) {
+      pullDataFromCloud(false, false);
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    if (appState.syncKey && !isSyncing) {
+      pullDataFromCloud(false, false);
+    }
+  });
 }
 
 function openCloudSyncModal() {
   const keyInput = document.getElementById('syncKeyInput');
-  const qrImg = document.getElementById('qrCodeImg');
-
   if (!appState.syncKey) {
     appState.syncKey = 'tuyendz169';
   }
-
   if (keyInput) keyInput.value = appState.syncKey;
 
-  const shareURL = `${window.location.origin}${window.location.pathname}?sync=${encodeURIComponent(appState.syncKey)}`;
-  if (qrImg) {
-    qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareURL)}`;
-  }
-
+  updateCloudQRCode();
   openModal('cloudModal');
 }
 
-window.openCloudSyncModal = function() {
+function updateCloudQRCode() {
+  const qrImg = document.getElementById('qrCodeImg');
+  const keyInput = document.getElementById('syncKeyInput');
+  const currentKey = keyInput ? keyInput.value.trim() : appState.syncKey;
+  if (!qrImg || !currentKey) return;
+  const shareURL = `${window.location.origin}${window.location.pathname}?sync=${encodeURIComponent(currentKey)}`;
+  qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(shareURL)}`;
+}
+
+window.openCloudSyncModal = function () {
   openCloudSyncModal();
 };
 
@@ -334,7 +445,7 @@ function renderAll() {
   renderPaymentsTable();
   renderGroupListTab();
   renderCharts();
-  
+
   if (window.lucide) {
     window.lucide.createIcons();
   }
@@ -378,7 +489,7 @@ function renderUserTabs() {
   uniqueUsers.forEach(uName => {
     const isSelected = appState.selectedUserTab === uName;
     const count = userMap[uName];
-    
+
     const userBtn = document.createElement('button');
     userBtn.className = `sidebar-user-item ${isSelected ? 'active' : ''}`;
     userBtn.innerHTML = `
@@ -453,7 +564,7 @@ function renderGroupSelect() {
   if (!select) return;
 
   select.innerHTML = '';
-  
+
   let groupsToDisplay = appState.groups;
   if (appState.selectedUserTab !== 'ALL') {
     const filtered = appState.groups.filter(g => {
@@ -520,14 +631,14 @@ function renderKPIs() {
   if (cumulativeEl) cumulativeEl.textContent = formatVND(kpis.totalCumulativeInterest);
   if (paidEl) paidEl.textContent = formatVND(kpis.totalActualPaid);
   if (baseEl) baseEl.textContent = formatVND(kpis.totalBaseAmount);
-  
+
   if (countEl) {
     countEl.textContent = `Tích lũy qua ${kpis.activeCount} kỳ đã đóng`;
   }
   if (rateEl) {
     rateEl.textContent = `+${kpis.returnRate.toFixed(1)}% Tiết kiệm`;
   }
-  
+
   if (progressPeriodsEl) {
     progressPeriodsEl.textContent = `${kpis.currentPeriodCount} / ${kpis.totalPlannedPeriods} kỳ`;
   }
@@ -662,15 +773,15 @@ function renderGroupListTab() {
 
   // Filter groups by selectedUserTab AND searchGroupQuery
   let groupsToRender = appState.groups;
-  
+
   if (appState.selectedUserTab !== 'ALL') {
     groupsToRender = groupsToRender.filter(g => (g.memberName || 'Chưa đặt tên') === appState.selectedUserTab);
   }
 
   if (appState.searchGroupQuery) {
     const q = appState.searchGroupQuery.toLowerCase();
-    groupsToRender = groupsToRender.filter(g => 
-      (g.name || '').toLowerCase().includes(q) || 
+    groupsToRender = groupsToRender.filter(g =>
+      (g.name || '').toLowerCase().includes(q) ||
       (g.memberName || '').toLowerCase().includes(q) ||
       (g.owner || '').toLowerCase().includes(q)
     );
@@ -690,7 +801,7 @@ function renderGroupListTab() {
     const isCurrent = g.id === appState.activeGroupId;
     const groupPayments = appState.payments.filter(p => p.groupId === g.id);
     const paidCount = groupPayments.filter(p => p.status === 'paid' || p.status === 'won').length;
-    
+
     let totalInterest = 0;
     groupPayments.forEach(p => {
       if (p.status === 'paid' || p.status === 'won') {
@@ -882,14 +993,19 @@ function setupEventListeners() {
   // Cloud Sync Buttons
   document.getElementById('btnCloudSync')?.addEventListener('click', openCloudSyncModal);
   document.getElementById('btnPushToCloud')?.addEventListener('click', () => pushDataToCloud(true));
-  document.getElementById('btnPullFromCloud')?.addEventListener('click', () => pullDataFromCloud(true));
-  document.getElementById('btnConnectSyncKey')?.addEventListener('click', () => {
+  document.getElementById('btnPullFromCloud')?.addEventListener('click', () => pullDataFromCloud(true, true));
+  document.getElementById('syncKeyInput')?.addEventListener('input', () => updateCloudQRCode());
+  document.getElementById('btnConnectSyncKey')?.addEventListener('click', async () => {
     const inputVal = document.getElementById('syncKeyInput')?.value;
     if (inputVal && inputVal.trim()) {
       appState.syncKey = inputVal.trim();
-      saveDataToStorage();
-      pullDataFromCloud(true);
-      closeModal('cloudModal');
+      saveDataToStorage(false);
+      updateCloudQRCode();
+      showToast('Đang kết nối Mã Đồng Bộ: ' + appState.syncKey + '...');
+      const success = await pullDataFromCloud(true, true);
+      if (success) {
+        closeModal('cloudModal');
+      }
     } else {
       alert('Vui lòng nhập Mã Đồng Bộ!');
     }
@@ -923,7 +1039,7 @@ function setupEventListeners() {
 
       btn.classList.add('active');
       document.getElementById(`tab-${tabTarget}`)?.classList.add('active');
-      
+
       if (tabTarget === 'analytics') {
         setTimeout(renderCharts, 50);
       }
@@ -932,7 +1048,7 @@ function setupEventListeners() {
 
   // Payment Form Submit
   document.getElementById('paymentForm')?.addEventListener('submit', handlePaymentFormSubmit);
-  
+
   // Group Form Submit
   document.getElementById('groupForm')?.addEventListener('submit', handleGroupFormSubmit);
 
@@ -1067,7 +1183,7 @@ function openPaymentModal(paymentId = null) {
     // New Period Mode
     document.getElementById('paymentModalTitle').textContent = 'Thêm Kỳ Đóng Mới';
     document.getElementById('paymentId').value = '';
-    
+
     // Auto increment period number
     const nextPeriod = processed.length > 0 ? Math.max(...processed.map(p => Number(p.periodNumber))) + 1 : 1;
     document.getElementById('periodNumber').value = nextPeriod;
@@ -1130,12 +1246,12 @@ function handlePaymentFormSubmit(e) {
   saveDataToStorage();
   closeModal('paymentModal');
   renderAll();
-  
+
   triggerConfetti();
   showToast(id ? 'Đã cập nhật thông tin kỳ đóng!' : 'Đã thêm kỳ đóng thành công!');
 }
 
-window.editPayment = function(id) {
+window.editPayment = function (id) {
   openPaymentModal(id);
 };
 
@@ -1144,7 +1260,7 @@ function showCustomConfirmModal({ title = 'Xác Nhận Xóa', message = 'Bạn c
   const modal = document.getElementById('confirmModal');
   const titleEl = document.getElementById('confirmModalTitle');
   const msgEl = document.getElementById('confirmModalMessage');
-  
+
   if (!modal) return;
 
   if (titleEl) titleEl.textContent = title;
@@ -1168,325 +1284,325 @@ document.addEventListener('DOMContentLoaded', () => {
     closeModal('confirmModal');
     confirmModalCallback = null;
   });
-// GROUP CRUD
-function openGroupModal(groupId = null) {
-  const form = document.getElementById('groupForm');
-  if (!form) return;
+  // GROUP CRUD
+  function openGroupModal(groupId = null) {
+    const form = document.getElementById('groupForm');
+    if (!form) return;
 
-  form.reset();
+    form.reset();
 
-  if (groupId) {
-    const g = appState.groups.find(item => item.id === groupId);
-    if (!g) return;
+    if (groupId) {
+      const g = appState.groups.find(item => item.id === groupId);
+      if (!g) return;
 
-    document.getElementById('groupModalTitle').textContent = 'Chỉnh Sửa Dây Họ';
-    document.getElementById('groupId').value = g.id;
-    document.getElementById('groupNameInput').value = g.name;
-    document.getElementById('groupMemberNameInput').value = g.memberName || '';
-    document.getElementById('groupBaseAmountInput').value = new Intl.NumberFormat('vi-VN').format(g.baseAmount);
-    document.getElementById('groupPeriodType').value = g.periodType || 'Hàng tháng';
-    document.getElementById('groupTotalPeriods').value = g.totalPeriods || 12;
-    document.getElementById('groupStartDate').value = g.startDate || '';
-    document.getElementById('groupOwner').value = g.owner || '';
-  } else {
-    document.getElementById('groupModalTitle').textContent = 'Tạo Dây Họ Mới';
-    document.getElementById('groupId').value = '';
-    // Pre-fill member name if a specific user tab is currently selected
-    const defaultUser = (appState.selectedUserTab && appState.selectedUserTab !== 'ALL') ? appState.selectedUserTab : '';
-    document.getElementById('groupMemberNameInput').value = defaultUser;
-    document.getElementById('groupBaseAmountInput').value = '5.000.000';
-    document.getElementById('groupTotalPeriods').value = 12;
+      document.getElementById('groupModalTitle').textContent = 'Chỉnh Sửa Dây Họ';
+      document.getElementById('groupId').value = g.id;
+      document.getElementById('groupNameInput').value = g.name;
+      document.getElementById('groupMemberNameInput').value = g.memberName || '';
+      document.getElementById('groupBaseAmountInput').value = new Intl.NumberFormat('vi-VN').format(g.baseAmount);
+      document.getElementById('groupPeriodType').value = g.periodType || 'Hàng tháng';
+      document.getElementById('groupTotalPeriods').value = g.totalPeriods || 12;
+      document.getElementById('groupStartDate').value = g.startDate || '';
+      document.getElementById('groupOwner').value = g.owner || '';
+    } else {
+      document.getElementById('groupModalTitle').textContent = 'Tạo Dây Họ Mới';
+      document.getElementById('groupId').value = '';
+      // Pre-fill member name if a specific user tab is currently selected
+      const defaultUser = (appState.selectedUserTab && appState.selectedUserTab !== 'ALL') ? appState.selectedUserTab : '';
+      document.getElementById('groupMemberNameInput').value = defaultUser;
+      document.getElementById('groupBaseAmountInput').value = '5.000.000';
+      document.getElementById('groupTotalPeriods').value = 12;
+    }
+
+    openModal('groupModal');
   }
 
-  openModal('groupModal');
-}
+  function handleGroupFormSubmit(e) {
+    e.preventDefault();
 
-function handleGroupFormSubmit(e) {
-  e.preventDefault();
+    const id = document.getElementById('groupId').value;
+    const name = document.getElementById('groupNameInput').value;
+    let rawMemberName = document.getElementById('groupMemberNameInput').value;
 
-  const id = document.getElementById('groupId').value;
-  const name = document.getElementById('groupNameInput').value;
-  let rawMemberName = document.getElementById('groupMemberNameInput').value;
-  
-  // Ensure non-empty memberName
-  const memberName = (rawMemberName && rawMemberName.trim()) ? rawMemberName.trim() : `Người dùng ${appState.groups.length + 1}`;
-  
-  const baseAmount = parseVND(document.getElementById('groupBaseAmountInput').value);
-  const periodType = document.getElementById('groupPeriodType').value;
-  const totalPeriods = Number(document.getElementById('groupTotalPeriods').value) || 12;
-  const startDate = document.getElementById('groupStartDate').value;
-  const owner = document.getElementById('groupOwner').value;
+    // Ensure non-empty memberName
+    const memberName = (rawMemberName && rawMemberName.trim()) ? rawMemberName.trim() : `Người dùng ${appState.groups.length + 1}`;
 
-  if (baseAmount <= 0) {
-    alert('Mức đóng chuẩn phải lớn hơn 0!');
-    return;
-  }
+    const baseAmount = parseVND(document.getElementById('groupBaseAmountInput').value);
+    const periodType = document.getElementById('groupPeriodType').value;
+    const totalPeriods = Number(document.getElementById('groupTotalPeriods').value) || 12;
+    const startDate = document.getElementById('groupStartDate').value;
+    const owner = document.getElementById('groupOwner').value;
 
-  if (id) {
-    const index = appState.groups.findIndex(g => g.id === id);
-    if (index !== -1) {
-      appState.groups[index] = {
-        ...appState.groups[index],
+    if (baseAmount <= 0) {
+      alert('Mức đóng chuẩn phải lớn hơn 0!');
+      return;
+    }
+
+    if (id) {
+      const index = appState.groups.findIndex(g => g.id === id);
+      if (index !== -1) {
+        appState.groups[index] = {
+          ...appState.groups[index],
+          name,
+          memberName,
+          baseAmount,
+          periodType,
+          totalPeriods,
+          startDate,
+          owner
+        };
+      }
+    } else {
+      const newGroup = {
+        id: generateId(),
         name,
         memberName,
         baseAmount,
         periodType,
         totalPeriods,
         startDate,
-        owner
+        owner,
+        createdAt: new Date().toISOString()
       };
+      appState.groups.push(newGroup);
+      appState.activeGroupId = newGroup.id;
     }
-  } else {
-    const newGroup = {
-      id: generateId(),
-      name,
-      memberName,
-      baseAmount,
-      periodType,
-      totalPeriods,
-      startDate,
-      owner,
-      createdAt: new Date().toISOString()
-    };
-    appState.groups.push(newGroup);
-    appState.activeGroupId = newGroup.id;
+
+    // Switch focus to the saved user tab
+    appState.selectedUserTab = memberName;
+
+    saveDataToStorage();
+    closeModal('groupModal');
+    renderAll();
+    showToast(id ? 'Đã cập nhật Dây Họ!' : 'Đã tạo Dây Họ mới!');
   }
 
-  // Switch focus to the saved user tab
-  appState.selectedUserTab = memberName;
-
-  saveDataToStorage();
-  closeModal('groupModal');
-  renderAll();
-  showToast(id ? 'Đã cập nhật Dây Họ!' : 'Đã tạo Dây Họ mới!');
-}
-
-window.openEditGroupModal = function(id) {
-  openGroupModal(id);
-};
-
-window.deletePayment = function(id) {
-  const p = appState.payments.find(item => item.id === id);
-  const periodStr = p ? `Kỳ số ${p.periodNumber}` : 'kỳ đóng này';
-
-  showCustomConfirmModal({
-    title: 'Xóa Kỳ Đóng Tiền',
-    message: `Bạn có chắc chắn muốn xóa ${periodStr}? Tất cả dữ liệu đóng tiền và lãi của kỳ này sẽ bị xóa.`,
-    onConfirm: () => {
-      appState.payments = appState.payments.filter(item => item.id !== id);
-      saveDataToStorage();
-      renderAll();
-      showToast('Đã xóa kỳ đóng!');
-    }
-  });
-};
-
-window.deleteGroup = function(id) {
-  if (appState.groups.length <= 1) {
-    alert('Bạn phải giữ lại ít nhất 1 dây họ!');
-    return;
-  }
-
-  const group = appState.groups.find(g => g.id === id);
-  const groupName = group ? group.name : 'dây họ này';
-
-  showCustomConfirmModal({
-    title: 'Xóa Dây Họ',
-    message: `Bạn có chắc chắn muốn xóa "${groupName}"? Tất cả lịch sử đóng tiền thuộc dây họ này sẽ bị xóa vĩnh viễn.`,
-    onConfirm: () => {
-      appState.groups = appState.groups.filter(g => g.id !== id);
-      appState.payments = appState.payments.filter(p => p.groupId !== id);
-      appState.activeGroupId = appState.groups[0].id;
-      saveDataToStorage();
-      renderAll();
-      showToast('Đã xóa Dây Họ!');
-    }
-  });
-};
-
-window.selectActiveGroup = function(id) {
-  selectActiveGroup(id);
-};
-
-// --- 9. DEMO DATA GENERATOR ---
-function loadDemoData(notify = true) {
-  const demoGroupId = 'demo_group_5m';
-  
-  appState.groups = [
-    {
-      id: demoGroupId,
-      name: 'Dây Họ 5 Triệu (Tháng)',
-      memberName: 'Nguyễn Văn Tuấn (Tôi)',
-      baseAmount: 5000000,
-      periodType: 'Hàng tháng',
-      totalPeriods: 12,
-      startDate: '2024-01-01',
-      owner: 'Chị Lan - Chợ Xóm Mới'
-    },
-    {
-      id: 'demo_group_10m',
-      name: 'Dây Hụi 10 Triệu Công Ty',
-      memberName: 'Trần Thị Mai',
-      baseAmount: 10000000,
-      periodType: 'Hàng tháng',
-      totalPeriods: 10,
-      startDate: '2024-03-01',
-      owner: 'Anh Hùng Kế Toán'
-    }
-  ];
-
-  // User example: Base 5M, paid 4.5M -> 500k interest
-  appState.payments = [
-    { id: 'p1', groupId: demoGroupId, periodNumber: 1, date: '2024-01-15', baseAmount: 5000000, actualAmount: 4500000, status: 'paid', note: 'Tháng 1 đóng 4.5Tr -> Lãi 500k' },
-    { id: 'p2', groupId: demoGroupId, periodNumber: 2, date: '2024-02-15', baseAmount: 5000000, actualAmount: 4700000, status: 'paid', note: 'Tháng 2 đóng 4.7Tr -> Lãi 300k' },
-    { id: 'p3', groupId: demoGroupId, periodNumber: 3, date: '2024-03-15', baseAmount: 5000000, actualAmount: 4300000, status: 'paid', note: 'Tháng 3 đóng 4.3Tr -> Lãi 700k' },
-    { id: 'p4', groupId: demoGroupId, periodNumber: 4, date: '2024-04-15', baseAmount: 5000000, actualAmount: 4600000, status: 'paid', note: 'Tháng 4 đóng 4.6Tr -> Lãi 400k' },
-    { id: 'p5', groupId: demoGroupId, periodNumber: 5, date: '2024-05-15', baseAmount: 5000000, actualAmount: 4200000, status: 'paid', note: 'Tháng 5 đóng 4.2Tr -> Lãi 800k' }
-  ];
-
-  appState.activeGroupId = demoGroupId;
-  saveDataToStorage();
-  renderAll();
-
-  if (notify) {
-    triggerConfetti();
-    showToast('Đã nạp dữ liệu mẫu thành công!');
-  }
-}
-
-// --- 10. EXPORT / IMPORT & UTILS ---
-function exportCSV() {
-  const processed = getProcessedPayments();
-  if (processed.length === 0) {
-    alert('Không có dữ liệu để xuất!');
-    return;
-  }
-
-  let csvContent = '\uFEFFKỳ số,Ngày đóng,Mức chuẩn (VNĐ),Thực đóng (VNĐ),Tiền lãi tháng (VNĐ),Lãi cộng dồn (VNĐ),Trạng thái,Ghi chú\n';
-
-  processed.forEach(p => {
-    const row = [
-      p.periodNumber,
-      p.date || '',
-      p.baseAmount,
-      p.actualAmount,
-      p.monthlyInterest,
-      p.cumulativeInterest,
-      p.status === 'paid' ? 'Đã đóng' : p.status === 'won' ? 'Đã hốt' : 'Chưa đóng',
-      `"${(p.note || '').replace(/"/g, '""')}"`
-    ];
-    csvContent += row.join(',') + '\n';
-  });
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const activeGroup = getActiveGroup();
-  link.setAttribute('href', url);
-  link.setAttribute('download', `So_Ho_${(activeGroup ? activeGroup.name : 'Data').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-
-  showToast('Đã xuất file CSV Excel thành công!');
-}
-
-function exportJSON() {
-  const data = {
-    groups: appState.groups,
-    payments: appState.payments,
-    exportDate: new Date().toISOString()
+  window.openEditGroupModal = function (id) {
+    openGroupModal(id);
   };
 
-  const jsonStr = JSON.stringify(data, null, 2);
-  const blob = new Blob([jsonStr], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', `Backup_So_Ho_${new Date().toISOString().slice(0,10)}.json`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  window.deletePayment = function (id) {
+    const p = appState.payments.find(item => item.id === id);
+    const periodStr = p ? `Kỳ số ${p.periodNumber}` : 'kỳ đóng này';
 
-  showToast('Đã tải file Backup JSON thành công!');
-}
-
-function handleImportJSON(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = (evt) => {
-    try {
-      const parsed = JSON.parse(evt.target.result);
-      if (parsed.groups && Array.isArray(parsed.groups)) {
-        appState.groups = parsed.groups;
-        appState.payments = parsed.payments || [];
-        appState.activeGroupId = appState.groups[0]?.id || null;
+    showCustomConfirmModal({
+      title: 'Xóa Kỳ Đóng Tiền',
+      message: `Bạn có chắc chắn muốn xóa ${periodStr}? Tất cả dữ liệu đóng tiền và lãi của kỳ này sẽ bị xóa.`,
+      onConfirm: () => {
+        appState.payments = appState.payments.filter(item => item.id !== id);
         saveDataToStorage();
         renderAll();
-        closeModal('exportModal');
-        triggerConfetti();
-        showToast('Khôi phục dữ liệu từ JSON thành công!');
-      } else {
-        alert('File JSON không hợp lệ!');
+        showToast('Đã xóa kỳ đóng!');
       }
-    } catch (err) {
-      alert('Không thể đọc file JSON!');
-    }
-  };
-  reader.readAsText(file);
-}
-
-function handleClearAllData() {
-  if (confirm('CẢNH BÁO: Xóa tất cả dữ liệu? Hành động này không thể hoàn tác!')) {
-    localStorage.clear();
-    appState.groups = [];
-    appState.payments = [];
-    appState.activeGroupId = null;
-    loadDemoData(false);
-    closeModal('exportModal');
-    showToast('Đã khôi phục dữ liệu về mặc định!');
-  }
-}
-
-// Modal Helpers
-function openModal(modalId) {
-  const modal = document.getElementById(modalId);
-  if (modal) modal.classList.remove('hidden');
-}
-
-function closeModal(modalId) {
-  const modal = document.getElementById(modalId);
-  if (modal) modal.classList.add('hidden');
-}
-
-// Toast Helper
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  const msgEl = document.getElementById('toastMessage');
-  if (!toast || !msgEl) return;
-
-  msgEl.textContent = message;
-  toast.classList.remove('hidden');
-  toast.classList.add('show');
-
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => toast.classList.add('hidden'), 300);
-  }, 3000);
-}
-
-// Confetti Celebration Helper
-function triggerConfetti() {
-  if (window.confetti) {
-    window.confetti({
-      particleCount: 50,
-      spread: 60,
-      origin: { y: 0.8 }
     });
-  }
-}
+  };
 
-// Initialize on DOM Ready
-document.addEventListener('DOMContentLoaded', initApp);
+  window.deleteGroup = function (id) {
+    if (appState.groups.length <= 1) {
+      alert('Bạn phải giữ lại ít nhất 1 dây họ!');
+      return;
+    }
+
+    const group = appState.groups.find(g => g.id === id);
+    const groupName = group ? group.name : 'dây họ này';
+
+    showCustomConfirmModal({
+      title: 'Xóa Dây Họ',
+      message: `Bạn có chắc chắn muốn xóa "${groupName}"? Tất cả lịch sử đóng tiền thuộc dây họ này sẽ bị xóa vĩnh viễn.`,
+      onConfirm: () => {
+        appState.groups = appState.groups.filter(g => g.id !== id);
+        appState.payments = appState.payments.filter(p => p.groupId !== id);
+        appState.activeGroupId = appState.groups[0].id;
+        saveDataToStorage();
+        renderAll();
+        showToast('Đã xóa Dây Họ!');
+      }
+    });
+  };
+
+  window.selectActiveGroup = function (id) {
+    selectActiveGroup(id);
+  };
+
+  // --- 9. DEMO DATA GENERATOR ---
+  function loadDemoData(notify = true) {
+    const demoGroupId = 'demo_group_5m';
+
+    appState.groups = [
+      {
+        id: demoGroupId,
+        name: 'Dây Họ 5 Triệu (Tháng)',
+        memberName: 'Nguyễn Văn Tuấn (Tôi)',
+        baseAmount: 5000000,
+        periodType: 'Hàng tháng',
+        totalPeriods: 12,
+        startDate: '2024-01-01',
+        owner: 'Chị Lan - Chợ Xóm Mới'
+      },
+      {
+        id: 'demo_group_10m',
+        name: 'Dây Hụi 10 Triệu Công Ty',
+        memberName: 'Trần Thị Mai',
+        baseAmount: 10000000,
+        periodType: 'Hàng tháng',
+        totalPeriods: 10,
+        startDate: '2024-03-01',
+        owner: 'Anh Hùng Kế Toán'
+      }
+    ];
+
+    // User example: Base 5M, paid 4.5M -> 500k interest
+    appState.payments = [
+      { id: 'p1', groupId: demoGroupId, periodNumber: 1, date: '2024-01-15', baseAmount: 5000000, actualAmount: 4500000, status: 'paid', note: 'Tháng 1 đóng 4.5Tr -> Lãi 500k' },
+      { id: 'p2', groupId: demoGroupId, periodNumber: 2, date: '2024-02-15', baseAmount: 5000000, actualAmount: 4700000, status: 'paid', note: 'Tháng 2 đóng 4.7Tr -> Lãi 300k' },
+      { id: 'p3', groupId: demoGroupId, periodNumber: 3, date: '2024-03-15', baseAmount: 5000000, actualAmount: 4300000, status: 'paid', note: 'Tháng 3 đóng 4.3Tr -> Lãi 700k' },
+      { id: 'p4', groupId: demoGroupId, periodNumber: 4, date: '2024-04-15', baseAmount: 5000000, actualAmount: 4600000, status: 'paid', note: 'Tháng 4 đóng 4.6Tr -> Lãi 400k' },
+      { id: 'p5', groupId: demoGroupId, periodNumber: 5, date: '2024-05-15', baseAmount: 5000000, actualAmount: 4200000, status: 'paid', note: 'Tháng 5 đóng 4.2Tr -> Lãi 800k' }
+    ];
+
+    appState.activeGroupId = demoGroupId;
+    saveDataToStorage();
+    renderAll();
+
+    if (notify) {
+      triggerConfetti();
+      showToast('Đã nạp dữ liệu mẫu thành công!');
+    }
+  }
+
+  // --- 10. EXPORT / IMPORT & UTILS ---
+  function exportCSV() {
+    const processed = getProcessedPayments();
+    if (processed.length === 0) {
+      alert('Không có dữ liệu để xuất!');
+      return;
+    }
+
+    let csvContent = '\uFEFFKỳ số,Ngày đóng,Mức chuẩn (VNĐ),Thực đóng (VNĐ),Tiền lãi tháng (VNĐ),Lãi cộng dồn (VNĐ),Trạng thái,Ghi chú\n';
+
+    processed.forEach(p => {
+      const row = [
+        p.periodNumber,
+        p.date || '',
+        p.baseAmount,
+        p.actualAmount,
+        p.monthlyInterest,
+        p.cumulativeInterest,
+        p.status === 'paid' ? 'Đã đóng' : p.status === 'won' ? 'Đã hốt' : 'Chưa đóng',
+        `"${(p.note || '').replace(/"/g, '""')}"`
+      ];
+      csvContent += row.join(',') + '\n';
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const activeGroup = getActiveGroup();
+    link.setAttribute('href', url);
+    link.setAttribute('download', `So_Ho_${(activeGroup ? activeGroup.name : 'Data').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    showToast('Đã xuất file CSV Excel thành công!');
+  }
+
+  function exportJSON() {
+    const data = {
+      groups: appState.groups,
+      payments: appState.payments,
+      exportDate: new Date().toISOString()
+    };
+
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Backup_So_Ho_${new Date().toISOString().slice(0, 10)}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    showToast('Đã tải file Backup JSON thành công!');
+  }
+
+  function handleImportJSON(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const parsed = JSON.parse(evt.target.result);
+        if (parsed.groups && Array.isArray(parsed.groups)) {
+          appState.groups = parsed.groups;
+          appState.payments = parsed.payments || [];
+          appState.activeGroupId = appState.groups[0]?.id || null;
+          saveDataToStorage();
+          renderAll();
+          closeModal('exportModal');
+          triggerConfetti();
+          showToast('Khôi phục dữ liệu từ JSON thành công!');
+        } else {
+          alert('File JSON không hợp lệ!');
+        }
+      } catch (err) {
+        alert('Không thể đọc file JSON!');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleClearAllData() {
+    if (confirm('CẢNH BÁO: Xóa tất cả dữ liệu? Hành động này không thể hoàn tác!')) {
+      localStorage.clear();
+      appState.groups = [];
+      appState.payments = [];
+      appState.activeGroupId = null;
+      loadDemoData(false);
+      closeModal('exportModal');
+      showToast('Đã khôi phục dữ liệu về mặc định!');
+    }
+  }
+
+  // Modal Helpers
+  function openModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function closeModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.add('hidden');
+  }
+
+  // Toast Helper
+  function showToast(message) {
+    const toast = document.getElementById('toast');
+    const msgEl = document.getElementById('toastMessage');
+    if (!toast || !msgEl) return;
+
+    msgEl.textContent = message;
+    toast.classList.remove('hidden');
+    toast.classList.add('show');
+
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.classList.add('hidden'), 300);
+    }, 3000);
+  }
+
+  // Confetti Celebration Helper
+  function triggerConfetti() {
+    if (window.confetti) {
+      window.confetti({
+        particleCount: 50,
+        spread: 60,
+        origin: { y: 0.8 }
+      });
+    }
+  }
+
+  // Initialize on DOM Ready
+  document.addEventListener('DOMContentLoaded', initApp);

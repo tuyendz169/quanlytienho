@@ -1332,6 +1332,7 @@ document.addEventListener('DOMContentLoaded', () => {
     closeModal('confirmModal');
     confirmModalCallback = null;
   });
+});
   // GROUP CRUD
   function openGroupModal(groupId = null) {
     const form = document.getElementById('groupForm');

@@ -75,14 +75,9 @@ function initApp() {
   // Render initial local state immediately
   renderAll();
 
-  // Automatic Cloud Pull on startup if syncKey exists
+  // Smart Cloud Sync on startup
   if (appState.syncKey) {
-    pullDataFromCloud(false, true).then((pulled) => {
-      if (!pulled && (!appState.groups || appState.groups.length === 0)) {
-        loadDemoData(false);
-        renderAll();
-      }
-    });
+    syncOnStartup();
   } else if (!appState.groups || appState.groups.length === 0) {
     loadDemoData(false);
     renderAll();
@@ -118,11 +113,55 @@ function loadDataFromStorage() {
     if (storedActiveGroup) appState.activeGroupId = storedActiveGroup;
     if (storedTheme) appState.theme = storedTheme;
     if (storedSyncKey) appState.syncKey = storedSyncKey;
-    if (storedUpdatedAt) appState.lastUpdatedAt = storedUpdatedAt;
+
+    if (storedUpdatedAt) {
+      appState.lastUpdatedAt = storedUpdatedAt;
+    } else if (appState.groups && appState.groups.length > 0) {
+      appState.lastUpdatedAt = new Date().toISOString();
+      localStorage.setItem(STORAGE_KEY_UPDATED_AT, appState.lastUpdatedAt);
+    }
   } catch (e) {
     console.error('Lỗi khi tải dữ liệu từ localStorage:', e);
     appState.groups = [];
     appState.payments = [];
+  }
+}
+
+async function syncOnStartup() {
+  if (!appState.syncKey) return;
+
+  updateCloudStatusBadge('syncing');
+
+  try {
+    const indexObj = await fetchCloudIndex();
+    const remoteRecord = indexObj.data ? indexObj.data[appState.syncKey] : null;
+
+    const hasLocalData = appState.groups && appState.groups.length > 0;
+    const hasRemoteData = remoteRecord && remoteRecord.groups && Array.isArray(remoteRecord.groups) && remoteRecord.groups.length > 0;
+
+    const remoteTime = (hasRemoteData && remoteRecord.updatedAt) ? new Date(remoteRecord.updatedAt).getTime() : 0;
+    const localTime = appState.lastUpdatedAt ? new Date(appState.lastUpdatedAt).getTime() : 0;
+
+    if (hasLocalData && hasRemoteData) {
+      if (remoteTime > localTime) {
+        await pullDataFromCloud(false, true);
+      } else {
+        await pushDataToCloud(false);
+      }
+    } else if (hasLocalData && !hasRemoteData) {
+      await pushDataToCloud(false);
+    } else if (!hasLocalData && hasRemoteData) {
+      await pullDataFromCloud(false, true);
+    } else {
+      loadDemoData(false);
+      renderAll();
+      await pushDataToCloud(false);
+    }
+
+    updateCloudStatusBadge('synced');
+  } catch (err) {
+    console.warn('Startup sync error:', err);
+    updateCloudStatusBadge('synced');
   }
 }
 
@@ -991,7 +1030,13 @@ function setupEventListeners() {
   });
 
   // Cloud Sync Buttons
-  document.getElementById('btnCloudSync')?.addEventListener('click', openCloudSyncModal);
+  document.getElementById('btnCloudSync')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openCloudSyncModal();
+    if (appState.syncKey) {
+      pushDataToCloud(true);
+    }
+  });
   document.getElementById('btnPushToCloud')?.addEventListener('click', () => pushDataToCloud(true));
   document.getElementById('btnPullFromCloud')?.addEventListener('click', () => pullDataFromCloud(true, true));
   document.getElementById('syncKeyInput')?.addEventListener('input', () => updateCloudQRCode());

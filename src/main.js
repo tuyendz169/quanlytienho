@@ -926,17 +926,22 @@ function updateTakePotCalculation() {
 
   const bidAmount = parseVND(bidInput?.value);
 
-  // Math formula breakdown:
-  // Dead periods count = targetPeriod - 1
-  const deadPeriodsCount = Math.max(0, targetPeriod - 1);
+  // Công thức tính tiền hốt họ:
+  // Dây họ N kỳ = N suất. Khi bạn hốt, bạn KHÔNG đóng cho chính mình,
+  // nên số người đóng cho bạn luôn là N - 1 (đã trừ suất của bạn).
+  const contributorsCount = Math.max(0, totalPeriods - 1);
+
+  // Kỳ chết: những suất đã hốt trước kỳ của bạn -> đóng đủ mức chuẩn
+  const deadPeriodsCount = Math.min(contributorsCount, Math.max(0, targetPeriod - 1));
   const deadBaseTotal = deadPeriodsCount * baseAmount;
 
-  // Live periods multiplier = max(0, totalPeriods - targetPeriod - 1)
-  // E.g. 30 total periods, taking at period 25 -> 30 - 25 - 1 = 4 live periods
-  const liveMultiplier = Math.max(0, totalPeriods - targetPeriod - 1);
+  // Kỳ sống: những suất chưa hốt -> đóng theo mức bạn úp
+  // VD: dây 31 kỳ, hốt ngay kỳ 1 -> 0 kỳ chết + 30 kỳ sống = bid x 30
+  const liveMultiplier = Math.max(0, contributorsCount - deadPeriodsCount);
   const liveTotal = bidAmount * liveMultiplier;
 
   const totalReceived = deadBaseTotal + liveTotal;
+
 
   // Update DOM elements
   const badgeEl = document.getElementById('takePotTargetPeriodBadge');

@@ -1404,3 +1404,181 @@ label {
   transform: translateY(-1px);
 }
 
+/* "NẾU LẤY HỌ" CALCULATOR SECTION */
+.take-pot-calculator {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color-strong);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-top: 20px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-md);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.take-pot-calculator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 5px;
+  height: 100%;
+  background: linear-gradient(180deg, var(--accent-purple), var(--accent-emerald));
+}
+
+.take-pot-calculator .calc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.take-pot-calculator .calc-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.take-pot-calculator .calc-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(16, 185, 129, 0.2));
+  color: var(--accent-purple);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+}
+
+.take-pot-calculator h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.take-pot-calculator .calc-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 2px 0 0 0;
+}
+
+.take-pot-calculator .calc-badge {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent-purple);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.take-pot-calculator .calc-inputs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 768px) {
+  .take-pot-calculator .calc-inputs-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.take-pot-calculator .input-with-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.take-pot-calculator .input-with-icon .currency-symbol {
+  position: absolute;
+  right: 14px;
+  font-weight: 700;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.take-pot-calculator .highlight-input {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-emerald-light);
+  padding-right: 32px;
+}
+
+.take-pot-calculator .calc-breakdown {
+  background: var(--bg-hover);
+  border: 1px dashed var(--border-color-strong);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.take-pot-calculator .breakdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.take-pot-calculator .breakdown-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.take-pot-calculator .breakdown-value {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.take-pot-calculator .breakdown-operator {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--accent-purple);
+}
+
+.take-pot-calculator .calc-result-banner {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.15));
+  border: 1px solid var(--accent-emerald-glow);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.take-pot-calculator .result-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.take-pot-calculator .result-label i {
+  color: var(--accent-emerald);
+}
+
+.take-pot-calculator .result-value {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+

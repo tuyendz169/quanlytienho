@@ -173,6 +173,65 @@
         </div>
       </section>
 
+      <!-- Executive Tool: "Nếu Lấy Họ" Calculator Card -->
+      <section class="take-pot-calculator shadow-sm">
+        <div class="calc-header">
+          <div class="calc-title-group">
+            <div class="calc-icon">
+              <i data-lucide="calculator"></i>
+            </div>
+            <div>
+              <h3>DỰ TÍNH "NẾU LẤY HỌ" THÁNG NÀY</h3>
+              <p class="calc-subtitle">Tính nhanh số tiền thực tế bạn sẽ nhận về nếu hốt họ ở kỳ dự tính</p>
+            </div>
+          </div>
+          <div class="calc-badge">
+            <span id="takePotTargetPeriodBadge">Kỳ 1 / 30</span>
+          </div>
+        </div>
+
+        <div class="calc-body">
+          <div class="calc-inputs-grid">
+            <div class="form-group mb-0">
+              <label for="takePotPeriodSelect">Chọn Kỳ Muốn Lấy Họ:</label>
+              <select id="takePotPeriodSelect" class="form-control" style="font-weight: 700;">
+                <!-- Dynamically populated options -->
+              </select>
+            </div>
+
+            <div class="form-group mb-0">
+              <label for="takePotBidInput">Số Tiền Muốn Úp / Đóng Để Lấy (VNĐ):</label>
+              <div class="input-with-icon">
+                <input type="text" id="takePotBidInput" placeholder="Ví dụ: 4.700.000" class="form-control highlight-input" />
+                <span class="currency-symbol">đ</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Calculation Breakdown Formula -->
+          <div class="calc-breakdown">
+            <div class="breakdown-item">
+              <span class="breakdown-label">Tổng mức chuẩn (<span id="takePotDeadPeriodsCount">0</span> kỳ đã đóng chuẩn):</span>
+              <strong class="breakdown-value text-purple" id="takePotDeadBaseTotal">0 đ</strong>
+            </div>
+            <div class="breakdown-operator">+</div>
+            <div class="breakdown-item">
+              <span class="breakdown-label">Tiền nhận từ <span id="takePotLivePeriodsCount">0</span> kỳ sống còn lại (<span id="takePotBidDisplay">0 đ</span> × <span id="takePotLiveMultiplier">0</span>):</span>
+              <strong class="breakdown-value text-blue" id="takePotLiveTotal">0 đ</strong>
+            </div>
+          </div>
+
+          <!-- Total Result Banner -->
+          <div class="calc-result-banner">
+            <div class="result-label">
+              <i data-lucide="coins"></i>
+              <span>TỔNG SỐ TIỀN THỰC TẾ NHẬN VỀ:</span>
+            </div>
+            <div class="result-value text-emerald" id="takePotTotalReceived">0 đ</div>
+          </div>
+        </div>
+      </section>
+
       <!-- Navigation Tabs -->
       <nav class="content-tabs">
         <button class="tab-btn active" data-tab="payments">
@@ -501,12 +560,12 @@
           <div class="backup-option-card">
             <div class="option-icon icon-purple"><i data-lucide="upload-cloud"></i></div>
             <div class="option-info">
-              <h4>Khôi Phục Từ File Backup</h4>
-              <p>Nhập lại file JSON đã lưu trước đây để phục hồi dữ liệu.</p>
+              <h4>Khôi Phục Từ File Backup (JSON / CSV)</h4>
+              <p>Nhập lại file Backup JSON hoặc file Excel (CSV) đã lưu trước đây để phục hồi dữ liệu.</p>
             </div>
-            <label for="importJsonFile" class="btn btn-secondary btn-sm pointer">
-              <i data-lucide="upload"></i> Chọn file JSON
-              <input type="file" id="importJsonFile" accept=".json" class="hidden-file-input" />
+            <label for="importBackupFile" class="btn btn-secondary btn-sm pointer">
+              <i data-lucide="upload"></i> Chọn file (JSON/CSV)
+              <input type="file" id="importBackupFile" accept=".json,.csv" class="hidden-file-input" />
             </label>
           </div>
 

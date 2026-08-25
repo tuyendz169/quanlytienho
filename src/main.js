@@ -25,6 +25,10 @@ let appState = {
 
 let cloudSyncTimer = null;
 let isSyncing = false;
+let pendingPush = false;        // a push was requested while another sync was running
+let cloudBootstrapping = false; // block cloud writes until the first pull finishes
+let cloudRetryTimer = null;
+let cloudRetryCount = 0;
 
 let confirmModalCallback = null;
 
@@ -71,6 +75,10 @@ function initApp() {
   } else if (!appState.syncKey) {
     appState.syncKey = 'tuyendz169'; // Default User Sync Key
   }
+
+  // Chặn mọi lệnh ghi lên Cloud cho tới khi tải xong dữ liệu lần đầu, tránh
+  // việc dữ liệu mẫu (demo) của máy này ghi đè lên dữ liệu thật trên Cloud.
+  cloudBootstrapping = !!appState.syncKey;
 
   // Render initial local state immediately
   renderAll();
@@ -130,43 +138,67 @@ function loadDataFromStorage() {
 async function syncOnStartup() {
   if (!appState.syncKey) return;
 
+  cloudBootstrapping = true;
   updateCloudStatusBadge('syncing');
 
   try {
-    const indexObj = await fetchCloudIndex();
-    const remoteRecord = indexObj.data ? indexObj.data[appState.syncKey] : null;
+    let remoteRecord = await fetchCloudRecord(appState.syncKey);
 
-    const hasLocalData = appState.groups && appState.groups.length > 0;
-    const hasRemoteData = remoteRecord && remoteRecord.groups && Array.isArray(remoteRecord.groups) && remoteRecord.groups.length > 0;
+    // Dữ liệu mẫu (demo) không được coi là dữ liệu thật của người dùng
+    const localIsDemoOnly = isDemoState();
+    const hasLocalData = appState.groups && appState.groups.length > 0 && !localIsDemoOnly;
+    let hasRemoteData = isValidRecord(remoteRecord);
 
-    const remoteTime = (hasRemoteData && remoteRecord.updatedAt) ? new Date(remoteRecord.updatedAt).getTime() : 0;
-    const localTime = appState.lastUpdatedAt ? new Date(appState.lastUpdatedAt).getTime() : 0;
-
-    if (hasLocalData && hasRemoteData) {
-      if (remoteTime > localTime) {
-        await pullDataFromCloud(false, true);
-      } else {
-        await pushDataToCloud(false);
+    // Nếu Cloud mới chưa có gì và máy này cũng chưa có dữ liệu thật,
+    // thử lấy lại dữ liệu từ endpoint cũ (chỉ chạy 1 lần, không sao nếu thất bại)
+    if (!hasRemoteData && !hasLocalData) {
+      const legacy = await tryFetchLegacyRecord(appState.syncKey);
+      if (isValidRecord(legacy)) {
+        remoteRecord = legacy;
+        hasRemoteData = true;
       }
-    } else if (hasLocalData && !hasRemoteData) {
-      await pushDataToCloud(false);
-    } else if (!hasLocalData && hasRemoteData) {
-      await pullDataFromCloud(false, true);
-    } else {
-      loadDemoData(false);
-      renderAll();
-      await pushDataToCloud(false);
     }
 
-    updateCloudStatusBadge('synced');
+    const remoteTime = hasRemoteData ? toTime(remoteRecord.updatedAt) : 0;
+    const localTime = toTime(appState.lastUpdatedAt);
+
+    cloudBootstrapping = false;
+
+    if (hasRemoteData && (!hasLocalData || remoteTime >= localTime)) {
+      // Cloud là bản mới nhất -> lấy Cloud làm chuẩn
+      applyRemoteRecord(remoteRecord);
+      updateCloudStatusBadge('synced');
+      if (pendingPush) {
+        pendingPush = false;
+      }
+      return;
+    }
+
+    if (hasLocalData) {
+      // Máy này có thay đổi mới hơn -> đẩy lên Cloud
+      pendingPush = false;
+      await pushDataToCloud(false);
+      return;
+    }
+
+    // Cả 2 nơi đều trống -> tạo dữ liệu mẫu rồi đẩy lên Cloud
+    if (!appState.groups || appState.groups.length === 0) {
+      loadDemoData(false);
+      renderAll();
+    }
+    pendingPush = false;
+    await pushDataToCloud(false);
   } catch (err) {
     console.warn('Startup sync error:', err);
-    updateCloudStatusBadge('synced');
+    cloudBootstrapping = false;
+    updateCloudStatusBadge('error', 'Không kết nối được Cloud');
   }
 }
 
-function saveDataToStorage(triggerPush = true) {
-  appState.lastUpdatedAt = new Date().toISOString();
+function saveDataToStorage(triggerPush = true, touchTimestamp = true) {
+  if (touchTimestamp) {
+    appState.lastUpdatedAt = new Date().toISOString();
+  }
   try {
     localStorage.setItem(STORAGE_KEY_GROUPS, JSON.stringify(appState.groups));
     localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(appState.payments));
@@ -184,8 +216,128 @@ function saveDataToStorage(triggerPush = true) {
 }
 
 // --- CLOUD MULTI-DEVICE SYNC ENGINE ---
-const GLOBAL_CLOUD_INDEX_ID = 'ff8081819ff5b11001a032a3fd850a49';
-const CLOUD_API_ENDPOINT = `https://api.restful-api.dev/objects/${GLOBAL_CLOUD_INDEX_ID}`;
+// Mỗi Mã Đồng Bộ được lưu thành 1 bản ghi riêng trên textdb.online.
+// Endpoint này cho phép CORS (*), không giới hạn số request và ghi/đọc tức thì.
+const CLOUD_BASE = 'https://textdb.online';
+const CLOUD_KEY_PREFIX = 'quanlyho-sync-v2-';
+const CLOUD_POLL_MS = 5000;
+const DEMO_GROUP_IDS = ['demo_group_5m', 'demo_group_10m'];
+
+// Endpoint cũ (chỉ dùng để cứu dữ liệu cũ 1 lần nếu có)
+const LEGACY_CLOUD_ENDPOINT = 'https://api.restful-api.dev/objects/ff8081819ff5b11001a032a3fd850a49';
+
+function cloudKeyFor(syncKey) {
+  const safe = String(syncKey || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  return CLOUD_KEY_PREFIX + (safe || 'default');
+}
+
+function toTime(iso) {
+  const t = iso ? new Date(iso).getTime() : 0;
+  return isNaN(t) ? 0 : t;
+}
+
+function isValidRecord(rec) {
+  return !!(rec && Array.isArray(rec.groups) && rec.groups.length > 0);
+}
+
+// Trạng thái hiện tại chỉ chứa dữ liệu mẫu? (chưa phải dữ liệu thật của người dùng)
+function isDemoState() {
+  if (!appState.groups || appState.groups.length === 0) return true;
+  return appState.groups.every(g => DEMO_GROUP_IDS.includes(g.id));
+}
+
+function isAnyModalOpen() {
+  return !!document.querySelector('.modal-overlay:not(.hidden)');
+}
+
+function buildCloudPayload() {
+  return {
+    syncKey: appState.syncKey,
+    groups: appState.groups,
+    payments: appState.payments,
+    activeGroupId: appState.activeGroupId,
+    updatedAt: appState.lastUpdatedAt || new Date().toISOString()
+  };
+}
+
+// Đọc bản ghi từ Cloud. Trả về null nếu Cloud chưa có dữ liệu cho mã này.
+async function fetchCloudRecord(syncKey) {
+  const url = `${CLOUD_BASE}/${cloudKeyFor(syncKey)}/?t=${Date.now()}`;
+  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+  if (!res.ok) throw new Error(`Không đọc được Cloud (${res.status})`);
+  const text = (await res.text()).trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.warn('Dữ liệu Cloud không hợp lệ, bỏ qua.');
+    return null;
+  }
+}
+
+// Ghi bản ghi lên Cloud (key nằm ở query, dữ liệu nằm trong body nên không giới hạn độ dài)
+async function saveCloudRecord(syncKey, record) {
+  const body = new URLSearchParams();
+  body.set('value', JSON.stringify(record));
+
+  const res = await fetch(`${CLOUD_BASE}/update/?key=${encodeURIComponent(cloudKeyFor(syncKey))}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: body.toString()
+  });
+
+  if (!res.ok) throw new Error(`Lưu Cloud thất bại (${res.status})`);
+
+  const text = (await res.text()).trim();
+  try {
+    const json = JSON.parse(text);
+    if (json && typeof json.status !== 'undefined' && Number(json.status) !== 1) {
+      throw new Error(json.error || 'Cloud từ chối ghi dữ liệu');
+    }
+  } catch (e) {
+    if (e && e.message && e.message.indexOf('Cloud') === 0) throw e;
+  }
+  return true;
+}
+
+// Cố gắng đọc dữ liệu từ endpoint cũ (best-effort, thất bại thì bỏ qua)
+async function tryFetchLegacyRecord(syncKey) {
+  try {
+    const res = await fetch(LEGACY_CLOUD_ENDPOINT, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json && json.data ? json.data[syncKey] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Áp dữ liệu Cloud vào máy này (giữ nguyên mốc thời gian của Cloud)
+function applyRemoteRecord(remote) {
+  const previousActive = appState.activeGroupId;
+
+  appState.groups = remote.groups || [];
+  appState.payments = remote.payments || [];
+  appState.lastUpdatedAt = remote.updatedAt || new Date().toISOString();
+
+  const exists = id => !!id && appState.groups.some(g => g.id === id);
+  if (!exists(appState.activeGroupId)) {
+    if (exists(previousActive)) {
+      appState.activeGroupId = previousActive;
+    } else if (exists(remote.activeGroupId)) {
+      appState.activeGroupId = remote.activeGroupId;
+    } else {
+      appState.activeGroupId = appState.groups[0] ? appState.groups[0].id : null;
+    }
+  }
+
+  // false, false = không đẩy lại lên Cloud và KHÔNG ghi đè mốc thời gian của Cloud
+  saveDataToStorage(false, false);
+  renderAll();
+}
 
 function updateCloudStatusBadge(status, errorMsg = '') {
   const textEl = document.getElementById('cloudStatusText');
@@ -212,23 +364,25 @@ function updateCloudStatusBadge(status, errorMsg = '') {
 
 function triggerCloudAutoPush() {
   if (!appState.syncKey) return;
+  if (cloudBootstrapping) {
+    pendingPush = true;
+    return;
+  }
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
+    cloudSyncTimer = null;
     pushDataToCloud(false);
-  }, 800);
+  }, 700);
 }
 
-async function fetchCloudIndex() {
-  const res = await fetch(CLOUD_API_ENDPOINT, {
-    method: 'GET',
-    headers: { 'Accept': 'application/json' }
-  });
-  if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-  const json = await res.json();
-  return {
-    name: json.name || 'quanlytienho_global_sync_v1',
-    data: json.data || {}
-  };
+function scheduleCloudRetry() {
+  if (cloudRetryTimer) clearTimeout(cloudRetryTimer);
+  cloudRetryCount = Math.min(cloudRetryCount + 1, 5);
+  const delay = Math.min(30000, 2000 * Math.pow(2, cloudRetryCount - 1));
+  cloudRetryTimer = setTimeout(() => {
+    cloudRetryTimer = null;
+    pushDataToCloud(false);
+  }, delay);
 }
 
 async function pushDataToCloud(notify = false) {
@@ -237,130 +391,143 @@ async function pushDataToCloud(notify = false) {
     return false;
   }
 
-  if (isSyncing) return false;
+  // Đang tải dữ liệu lần đầu hoặc đang có 1 lượt đồng bộ khác chạy:
+  // ghi nhận lại để đẩy sau, KHÔNG bỏ mất thay đổi của người dùng.
+  if (cloudBootstrapping || isSyncing) {
+    pendingPush = true;
+    return false;
+  }
+
   isSyncing = true;
   updateCloudStatusBadge('syncing');
 
-  const nowIso = new Date().toISOString();
-  appState.lastUpdatedAt = nowIso;
-  try {
-    localStorage.setItem(STORAGE_KEY_UPDATED_AT, nowIso);
-  } catch (e) {}
-
-  const payload = {
-    syncKey: appState.syncKey,
-    groups: appState.groups,
-    payments: appState.payments,
-    updatedAt: nowIso
-  };
-
-  try {
-    let indexObj;
+  if (!appState.lastUpdatedAt) {
+    appState.lastUpdatedAt = new Date().toISOString();
     try {
-      indexObj = await fetchCloudIndex();
-    } catch (e) {
-      indexObj = { name: 'quanlytienho_global_sync_v1', data: {} };
-    }
+      localStorage.setItem(STORAGE_KEY_UPDATED_AT, appState.lastUpdatedAt);
+    } catch (e) {}
+  }
 
-    if (!indexObj.data) indexObj.data = {};
-    indexObj.data[appState.syncKey] = payload;
+  try {
+    await saveCloudRecord(appState.syncKey, buildCloudPayload());
 
-    const putRes = await fetch(CLOUD_API_ENDPOINT, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({
-        name: indexObj.name,
-        data: indexObj.data
-      })
-    });
-
-    if (!putRes.ok) {
-      throw new Error(`Cập nhật Cloud thất bại (${putRes.status})`);
+    cloudRetryCount = 0;
+    if (cloudRetryTimer) {
+      clearTimeout(cloudRetryTimer);
+      cloudRetryTimer = null;
     }
 
     updateCloudStatusBadge('synced');
     if (notify) showToast('✅ Đã lưu dữ liệu lên Cloud thành công!');
-    isSyncing = false;
     return true;
   } catch (err) {
     console.error('Cloud Push error:', err);
-    updateCloudStatusBadge('error', 'Lỗi kết nối Cloud');
+    updateCloudStatusBadge('error', err.message || 'Lỗi kết nối Cloud');
     if (notify) showToast('❌ Lỗi kết nối Cloud: ' + err.message);
-    isSyncing = false;
+    scheduleCloudRetry();
     return false;
+  } finally {
+    isSyncing = false;
+    if (pendingPush) {
+      pendingPush = false;
+      setTimeout(() => pushDataToCloud(false), 300);
+    }
   }
 }
 
 async function pullDataFromCloud(notify = false, forceReplace = false) {
   if (!appState.syncKey) return false;
+  if (isSyncing && !forceReplace) return false;
 
-  updateCloudStatusBadge('syncing');
+  if (notify || forceReplace) updateCloudStatusBadge('syncing');
 
   try {
-    const indexObj = await fetchCloudIndex();
-    const remoteRecord = indexObj.data ? indexObj.data[appState.syncKey] : null;
+    const remoteRecord = await fetchCloudRecord(appState.syncKey);
 
-    if (remoteRecord && remoteRecord.groups && Array.isArray(remoteRecord.groups) && remoteRecord.groups.length > 0) {
-      const remoteTime = remoteRecord.updatedAt ? new Date(remoteRecord.updatedAt).getTime() : 0;
-      const localTime = appState.lastUpdatedAt ? new Date(appState.lastUpdatedAt).getTime() : 0;
-
-      if (forceReplace || remoteTime > localTime || !appState.groups || appState.groups.length === 0) {
-        const previousActive = appState.activeGroupId;
-        appState.groups = remoteRecord.groups;
-        appState.payments = remoteRecord.payments || [];
-        appState.lastUpdatedAt = remoteRecord.updatedAt || new Date().toISOString();
-
-        if (!appState.groups.some(g => g.id === appState.activeGroupId)) {
-          if (previousActive && appState.groups.some(g => g.id === previousActive)) {
-            appState.activeGroupId = previousActive;
-          } else {
-            appState.activeGroupId = appState.groups[0]?.id || null;
-          }
-        }
-
-        saveDataToStorage(false);
-        renderAll();
-        updateCloudStatusBadge('synced');
-        if (notify) {
-          showToast('📱 Đã đồng bộ dữ liệu mới nhất từ Cloud!');
-        }
-        return true;
-      }
-    } else {
-      if (appState.groups && appState.groups.length > 0) {
+    // Cloud chưa có dữ liệu cho mã này -> đẩy dữ liệu thật của máy này lên
+    if (!isValidRecord(remoteRecord)) {
+      if (appState.groups && appState.groups.length > 0 && !isDemoState()) {
         await pushDataToCloud(false);
+        if (notify) showToast('☁️ Cloud chưa có dữ liệu, đã tải dữ liệu máy này lên!');
+      } else {
+        updateCloudStatusBadge('synced');
+        if (notify) showToast('☁️ Cloud chưa có dữ liệu cho mã đồng bộ này.');
       }
+      return true;
     }
+
+    const remoteTime = toTime(remoteRecord.updatedAt);
+    const localTime = toTime(appState.lastUpdatedAt);
+
+    if (forceReplace || remoteTime > localTime || isDemoState()) {
+      applyRemoteRecord(remoteRecord);
+      updateCloudStatusBadge('synced');
+      if (notify) showToast('📱 Đã đồng bộ dữ liệu mới nhất từ Cloud!');
+      return true;
+    }
+
+    // Máy này mới hơn Cloud -> đẩy lên để 2 bên khớp nhau
+    if (localTime > remoteTime) {
+      await pushDataToCloud(false);
+      if (notify) showToast('✅ Máy này đang có bản mới nhất, đã cập nhật lên Cloud!');
+      return true;
+    }
+
     updateCloudStatusBadge('synced');
+    if (notify) showToast('✅ Dữ liệu đã đồng bộ, không có thay đổi mới.');
     return true;
   } catch (err) {
     console.warn('Cloud Pull error:', err);
-    updateCloudStatusBadge('synced');
+    updateCloudStatusBadge('error', err.message || 'Lỗi kết nối Cloud');
     if (notify) showToast('⚠️ Không thể tải từ Cloud: ' + err.message);
     return false;
   }
 }
 
 function startAutoSyncEngine() {
+  const autoPull = () => {
+    if (!appState.syncKey) return;
+    if (isSyncing || cloudBootstrapping) return;
+    // Không ghi đè dữ liệu khi người dùng đang nhập liệu trong popup
+    if (isAnyModalOpen()) return;
+    pullDataFromCloud(false, false);
+  };
+
   setInterval(() => {
-    if (document.visibilityState === 'visible' && appState.syncKey && !isSyncing) {
-      pullDataFromCloud(false, false);
-    }
-  }, 8000);
+    if (document.visibilityState === 'visible') autoPull();
+  }, CLOUD_POLL_MS);
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && appState.syncKey && !isSyncing) {
-      pullDataFromCloud(false, false);
-    }
+    if (document.visibilityState === 'visible') autoPull();
   });
 
-  window.addEventListener('focus', () => {
-    if (appState.syncKey && !isSyncing) {
-      pullDataFromCloud(false, false);
-    }
+  window.addEventListener('focus', autoPull);
+
+  window.addEventListener('online', () => {
+    updateCloudStatusBadge('syncing');
+    autoPull();
+  });
+
+  // Đẩy nốt thay đổi đang chờ trước khi rời trang (quan trọng trên điện thoại)
+  const flushBeforeExit = () => {
+    if (!appState.syncKey || !cloudSyncTimer) return;
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = null;
+    try {
+      const body = new URLSearchParams();
+      body.set('value', JSON.stringify(buildCloudPayload()));
+      const url = `${CLOUD_BASE}/update/?key=${encodeURIComponent(cloudKeyFor(appState.syncKey))}`;
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body.toString()], {
+          type: 'application/x-www-form-urlencoded;charset=UTF-8'
+        }));
+      }
+    } catch (e) {}
+  };
+
+  window.addEventListener('pagehide', flushBeforeExit);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushBeforeExit();
   });
 }
 
@@ -1145,7 +1312,7 @@ function setupEventListeners() {
     const inputVal = document.getElementById('syncKeyInput')?.value;
     if (inputVal && inputVal.trim()) {
       appState.syncKey = inputVal.trim();
-      saveDataToStorage(false);
+      saveDataToStorage(false, false);
       updateCloudQRCode();
       showToast('Đang kết nối Mã Đồng Bộ: ' + appState.syncKey + '...');
       const success = await pullDataFromCloud(true, true);
